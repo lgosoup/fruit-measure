@@ -2,8 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <!-- 핀치 줌은 사진에만 적용하고 페이지 자체는 확대되지 않게 한다 -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#1f2937">
   <title>fruit-measure</title>
   <link rel="stylesheet" href="style.css">
@@ -17,23 +16,20 @@
     </header>
 
     <div class="actions">
-      <button id="btn-camera" class="btn btn-primary" type="button">사진 촬영</button>
-      <button id="btn-gallery" class="btn btn-secondary" type="button">갤러리에서 불러오기</button>
+      <button id="btn-open" class="btn btn-primary" type="button">사진 불러오기</button>
       <button id="btn-records" class="btn btn-secondary" type="button">기록 보기</button>
     </div>
 
-    <p id="home-message" class="guide">과일과 신용카드를 테이블 위에 나란히 놓고 위에서 촬영하세요.</p>
+    <p id="home-message" class="guide">과일과 신용카드를 테이블 위에 나란히 놓고 위에서 찍은 사진을 불러오세요.</p>
 
-    <!-- 촬영용(후면 카메라 바로 실행), 갤러리용 파일 선택 -->
-    <input id="input-camera" type="file" accept="image/*" capture="environment" hidden>
-    <input id="input-gallery" type="file" accept="image/*" hidden>
+    <input id="input-photo" type="file" accept="image/*" hidden>
   </main>
 
   <!-- 사진 화면 -->
   <section id="screen-photo" class="photo" hidden>
     <div class="photo-bar">
       <button id="btn-back" class="btn-bar" type="button">← 처음으로</button>
-      <span class="photo-hint">두 손가락으로 확대, 드래그로 이동</span>
+      <span class="photo-hint">마우스 휠로 확대, 드래그로 이동</span>
     </div>
     <canvas id="photo-canvas" class="photo-canvas"></canvas>
   </section>

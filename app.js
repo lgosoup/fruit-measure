@@ -2,8 +2,7 @@
 const homeScreen = document.getElementById("screen-home");
 const photoScreen = document.getElementById("screen-photo");
 const homeMessage = document.getElementById("home-message");
-const inputCamera = document.getElementById("input-camera");
-const inputGallery = document.getElementById("input-gallery");
+const inputPhoto = document.getElementById("input-photo");
 const canvas = document.getElementById("photo-canvas");
 const ctx = canvas.getContext("2d");
 
@@ -15,15 +14,13 @@ const view = { scale: 1, minScale: 1, maxScale: 1, offsetX: 0, offsetY: 0 };
 const MAX_ZOOM = 10; // 화면 맞춤 대비 최대 확대 배율
 
 // ---------- 첫 화면 버튼 ----------
-document.getElementById("btn-camera").addEventListener("click", () => inputCamera.click());
-document.getElementById("btn-gallery").addEventListener("click", () => inputGallery.click());
+document.getElementById("btn-open").addEventListener("click", () => inputPhoto.click());
 document.getElementById("btn-records").addEventListener("click", () => {
   homeMessage.textContent = "기록 기능은 준비 중입니다.";
 });
 document.getElementById("btn-back").addEventListener("click", showHome);
 
-inputCamera.addEventListener("change", onFileSelected);
-inputGallery.addEventListener("change", onFileSelected);
+inputPhoto.addEventListener("change", onFileSelected);
 
 async function onFileSelected(event) {
   const file = event.target.files[0];
@@ -84,7 +81,7 @@ function draw() {
   ctx.drawImage(photo, 0, 0);
 }
 
-// 화면 크기가 바뀌면(폰 회전, 폴드 화면 전환) 다시 맞춘다
+// 브라우저 창 크기가 바뀌면 다시 맞춘다
 window.addEventListener("resize", () => {
   if (photoScreen.hidden || !photo) return;
   resizeCanvas();
@@ -92,9 +89,8 @@ window.addEventListener("resize", () => {
   draw();
 });
 
-// ---------- 핀치 줌과 드래그 이동 ----------
-const pointers = new Map(); // 화면에 닿아 있는 손가락들
-let lastPinch = null;       // 직전 두 손가락의 중심과 간격
+// ---------- 드래그 이동 ----------
+let dragFrom = null; // 직전 마우스 위치
 
 function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
@@ -102,58 +98,39 @@ function canvasPoint(event) {
 }
 
 canvas.addEventListener("pointerdown", (event) => {
-  // 손가락이 캔버스 밖으로 나가도 이벤트를 계속 받는다(실패해도 동작에는 지장 없음)
+  // 마우스가 캔버스 밖으로 나가도 이벤트를 계속 받는다(실패해도 동작에는 지장 없음)
   try {
     canvas.setPointerCapture(event.pointerId);
   } catch (error) {
     // 무시
   }
-  pointers.set(event.pointerId, canvasPoint(event));
-  lastPinch = null;
+  dragFrom = canvasPoint(event);
 });
 
 canvas.addEventListener("pointermove", (event) => {
-  if (!pointers.has(event.pointerId)) return;
-  const prev = pointers.get(event.pointerId);
+  if (!dragFrom) return;
   const curr = canvasPoint(event);
-  pointers.set(event.pointerId, curr);
-
-  if (pointers.size === 1) {
-    // 한 손가락: 사진 이동
-    view.offsetX += curr.x - prev.x;
-    view.offsetY += curr.y - prev.y;
-  } else if (pointers.size === 2) {
-    // 두 손가락: 중심을 기준으로 확대·축소하고, 중심이 움직인 만큼 이동
-    const [a, b] = [...pointers.values()];
-    const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    const distance = Math.hypot(a.x - b.x, a.y - b.y);
-
-    if (lastPinch) {
-      const newScale = clamp(view.scale * (distance / lastPinch.distance), view.minScale, view.maxScale);
-      const ratio = newScale / view.scale;
-      view.offsetX = center.x - (lastPinch.center.x - view.offsetX) * ratio;
-      view.offsetY = center.y - (lastPinch.center.y - view.offsetY) * ratio;
-      view.scale = newScale;
-    }
-    lastPinch = { center, distance };
-  }
-
+  view.offsetX += curr.x - dragFrom.x;
+  view.offsetY += curr.y - dragFrom.y;
+  dragFrom = curr;
   keepPhotoInView();
   draw();
 });
 
-function endPointer(event) {
-  pointers.delete(event.pointerId);
-  lastPinch = null;
+function endDrag() {
+  dragFrom = null;
 }
-canvas.addEventListener("pointerup", endPointer);
-canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
 
-// PC 확인용: 마우스 휠로 확대·축소
+// ---------- 마우스 휠 확대·축소 ----------
+// 휠 위치를 기준으로 확대하고, 페이지가 스크롤되지 않게 막는다
 canvas.addEventListener("wheel", (event) => {
   event.preventDefault();
   const p = canvasPoint(event);
-  const newScale = clamp(view.scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1), view.minScale, view.maxScale);
+  // 휠을 굴린 양에 비례해 확대(한 칸 약 1.2배). 줄 단위로 오는 경우도 픽셀 단위로 맞춘다
+  const delta = event.deltaMode === 1 ? event.deltaY * 40 : event.deltaY;
+  const newScale = clamp(view.scale * Math.exp(-delta * 0.0018), view.minScale, view.maxScale);
   const ratio = newScale / view.scale;
   view.offsetX = p.x - (p.x - view.offsetX) * ratio;
   view.offsetY = p.y - (p.y - view.offsetY) * ratio;
