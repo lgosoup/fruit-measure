@@ -115,6 +115,24 @@ body {
   color: #9ca3af;
 }
 
+.photo-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  color: #f9fafb;
+}
+
+.photo-status {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.photo-status strong {
+  color: #22d3ee;
+}
+
 .photo-canvas {
   flex: 1;
   width: 100%;

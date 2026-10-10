@@ -3,6 +3,7 @@ const homeScreen = document.getElementById("screen-home");
 const photoScreen = document.getElementById("screen-photo");
 const homeMessage = document.getElementById("home-message");
 const inputPhoto = document.getElementById("input-photo");
+const photoStatus = document.getElementById("photo-status");
 const canvas = document.getElementById("photo-canvas");
 const ctx = canvas.getContext("2d");
 
@@ -13,12 +14,23 @@ let photo = null;
 const view = { scale: 1, minScale: 1, maxScale: 1, offsetX: 0, offsetY: 0 };
 const MAX_ZOOM = 10; // 화면 맞춤 대비 최대 확대 배율
 
+// 기준 사물: 신용카드 가로 길이
+const CARD_WIDTH_MM = 85.6;
+const CARD_COLOR = "#22d3ee";
+// cardPoints: 카드 양 끝 점(원본 사진 픽셀 좌표). 확대 배율과 상관없이 같은 값이 나오도록 사진 좌표로 저장한다
+let cardPoints = [];
+let mmPerPixel = null; // 원본 사진 1픽셀이 실제 몇 mm인지
+
 // ---------- 첫 화면 버튼 ----------
 document.getElementById("btn-open").addEventListener("click", () => inputPhoto.click());
 document.getElementById("btn-records").addEventListener("click", () => {
   homeMessage.textContent = "기록 기능은 준비 중입니다.";
 });
 document.getElementById("btn-back").addEventListener("click", showHome);
+document.getElementById("btn-reset-card").addEventListener("click", () => {
+  resetCard();
+  draw();
+});
 
 inputPhoto.addEventListener("change", onFileSelected);
 
@@ -32,6 +44,7 @@ async function onFileSelected(event) {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
     if (photo) photo.close();
     photo = bitmap;
+    resetCard();
     showPhoto();
   } catch (error) {
     console.error(error);
@@ -79,6 +92,70 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.offsetX, dpr * view.offsetY);
   ctx.drawImage(photo, 0, 0);
+
+  // 점과 선은 확대 배율과 상관없이 같은 크기로 보이도록 화면 좌표로 그린다
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawPoints(cardPoints, CARD_COLOR);
+}
+
+function drawPoints(points, color) {
+  const screen = points.map(photoToScreen);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2;
+  if (screen.length === 2) {
+    ctx.beginPath();
+    ctx.moveTo(screen[0].x, screen[0].y);
+    ctx.lineTo(screen[1].x, screen[1].y);
+    ctx.stroke();
+  }
+  for (const p of screen) {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// ---------- 좌표 변환 ----------
+function screenToPhoto(p) {
+  return { x: (p.x - view.offsetX) / view.scale, y: (p.y - view.offsetY) / view.scale };
+}
+
+function photoToScreen(p) {
+  return { x: p.x * view.scale + view.offsetX, y: p.y * view.scale + view.offsetY };
+}
+
+// ---------- 신용카드 기준 지정 ----------
+function resetCard() {
+  cardPoints = [];
+  mmPerPixel = null;
+  updateStatus();
+}
+
+function addCardPoint(photoPoint) {
+  // 이미 두 점이 있으면 새로 지정을 시작한다
+  if (cardPoints.length === 2) resetCard();
+  cardPoints.push(photoPoint);
+  if (cardPoints.length === 2) {
+    const [a, b] = cardPoints;
+    const lengthPx = Math.hypot(a.x - b.x, a.y - b.y);
+    mmPerPixel = lengthPx > 0 ? CARD_WIDTH_MM / lengthPx : null;
+  }
+  updateStatus();
+}
+
+function updateStatus() {
+  if (cardPoints.length < 2 || !mmPerPixel) {
+    photoStatus.textContent = `신용카드 가로 양 끝을 클릭하세요 (${cardPoints.length}/2)`;
+    return;
+  }
+  const [a, b] = cardPoints;
+  const lengthPx = Math.hypot(a.x - b.x, a.y - b.y);
+  photoStatus.innerHTML =
+    `<strong>기준 설정됨</strong> · 카드 ${lengthPx.toFixed(0)}px = ${CARD_WIDTH_MM}mm · 1px = ${mmPerPixel.toFixed(4)}mm`;
 }
 
 // 브라우저 창 크기가 바뀌면 다시 맞춘다
@@ -89,8 +166,12 @@ window.addEventListener("resize", () => {
   draw();
 });
 
-// ---------- 드래그 이동 ----------
-let dragFrom = null; // 직전 마우스 위치
+// ---------- 클릭(점 찍기)과 드래그(이동) ----------
+// 누른 위치에서 조금이라도 움직이면 드래그로 보고, 거의 움직이지 않고 떼면 클릭으로 본다
+const CLICK_TOLERANCE = 5; // CSS 픽셀
+let dragFrom = null;  // 직전 마우스 위치
+let pressStart = null; // 누른 위치
+let dragging = false;
 
 function canvasPoint(event) {
   const rect = canvas.getBoundingClientRect();
@@ -105,11 +186,17 @@ canvas.addEventListener("pointerdown", (event) => {
     // 무시
   }
   dragFrom = canvasPoint(event);
+  pressStart = dragFrom;
+  dragging = false;
 });
 
 canvas.addEventListener("pointermove", (event) => {
   if (!dragFrom) return;
   const curr = canvasPoint(event);
+  if (!dragging && Math.hypot(curr.x - pressStart.x, curr.y - pressStart.y) > CLICK_TOLERANCE) {
+    dragging = true;
+  }
+  if (!dragging) return;
   view.offsetX += curr.x - dragFrom.x;
   view.offsetY += curr.y - dragFrom.y;
   dragFrom = curr;
@@ -117,11 +204,24 @@ canvas.addEventListener("pointermove", (event) => {
   draw();
 });
 
+canvas.addEventListener("pointerup", (event) => {
+  if (dragFrom && !dragging) {
+    const p = screenToPhoto(canvasPoint(event));
+    // 사진 바깥을 클릭한 경우는 무시한다
+    if (p.x >= 0 && p.y >= 0 && p.x <= photo.width && p.y <= photo.height) {
+      addCardPoint(p);
+      draw();
+    }
+  }
+  endDrag();
+});
+canvas.addEventListener("pointercancel", endDrag);
+
 function endDrag() {
   dragFrom = null;
+  pressStart = null;
+  dragging = false;
 }
-canvas.addEventListener("pointerup", endDrag);
-canvas.addEventListener("pointercancel", endDrag);
 
 // ---------- 마우스 휠 확대·축소 ----------
 // 휠 위치를 기준으로 확대하고, 페이지가 스크롤되지 않게 막는다
