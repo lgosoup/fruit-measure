@@ -68,6 +68,30 @@ function measureFruitAr(a, b, camera) {
   };
 }
 
+// ---------- 사진으로 거리 계산 ----------
+// 사진 속 점(px)을 카메라에서 나가는 시선 방향으로 바꾼다
+function pixelToRay(p, k) {
+  return [(p.x - k.cx) / k.fx, (p.y - k.cy) / k.fy, 1];
+}
+
+// 과일(구)의 양 끝을 겨눈 두 시선은 구에 접한다. 두 시선 사이 각도의 절반을 α라 하면
+// sin α = 반지름 / 중심까지 거리  →  중심까지 거리 = 반지름 / sin α, 표면까지 거리 = 중심까지 거리 - 반지름
+// 과일이 사진 가운데에 있지 않아도 성립한다
+// 반환: { distanceMm: 표면까지, centerMm: 중심까지 } 또는 계산할 수 없으면 null
+function distanceFromPhoto(p1, p2, intrinsics, sizeMm) {
+  const a = pixelToRay(p1, intrinsics);
+  const b = pixelToRay(p2, intrinsics);
+  const cos = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (Math.hypot(...a) * Math.hypot(...b));
+  const angle = Math.acos(Math.min(1, Math.max(-1, cos)));
+  if (!(angle > 0) || !(sizeMm > 0)) return null;
+  const r = sizeMm / 2;
+  const centerMm = r / Math.sin(angle / 2);
+  return { distanceMm: centerMm - r, centerMm };
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr };
+  module.exports = {
+    transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr,
+    pixelToRay, distanceFromPhoto,
+  };
 }

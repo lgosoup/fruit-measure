@@ -375,11 +375,20 @@ function createBlit(gl) {
 
 // ---------- 찍은 사진 화면 ----------
 // photo: 찍은 사진(카메라 이미지 픽셀 크기 유지), intrinsics: 그 사진의 초점거리·중심(px)
+// view: 화면 좌표 = 사진 좌표 * scale + (offsetX, offsetY), 단위는 CSS 픽셀 (1차와 같음)
 let photo = null;
 let intrinsics = null;
 const view = { scale: 1, minScale: 1, maxScale: 1, offsetX: 0, offsetY: 0 };
+const MAX_ZOOM = 10;
+// photoPoints: 사진에서 지정한 과일 양 끝(사진 픽셀 좌표), photoResult: 거리 계산 결과
+let photoPoints = [];
+let photoResult = null;
 
 document.getElementById("btn-retake").addEventListener("click", showArUi);
+document.getElementById("btn-reset-fruit").addEventListener("click", () => {
+  resetPhotoFruit();
+  draw();
+});
 
 async function showPhoto(image, cameraIntrinsics) {
   const bitmap = await createImageBitmap(image);
@@ -389,12 +398,42 @@ async function showPhoto(image, cameraIntrinsics) {
   arUi.hidden = true;
   arCanvas.hidden = true;
   photoScreen.hidden = false;
-  photoInfo.textContent =
-    `${photo.width}×${photo.height}px · 초점거리 ${intrinsics.fx.toFixed(0)}px`;
-  photoStatus.textContent = "사진이 선명한지 확인하세요. 흐리면 다시 찍기를 누르세요.";
+  photoInfo.textContent = `${photo.width}×${photo.height}px · 초점거리 ${intrinsics.fx.toFixed(0)}px`;
+  resetPhotoFruit();
   resizeCanvas();
   fitToScreen();
   draw();
+}
+
+function resetPhotoFruit() {
+  photoPoints = [];
+  photoResult = null;
+  updatePhotoStatus();
+}
+
+function addPhotoPoint(p) {
+  if (photoPoints.length === 2) photoPoints = [];
+  photoResult = null;
+  photoPoints.push(p);
+  if (photoPoints.length === 2 && arResult) {
+    photoResult = distanceFromPhoto(photoPoints[0], photoPoints[1], intrinsics, arResult.sizeMm);
+  }
+  updatePhotoStatus();
+}
+
+function updatePhotoStatus() {
+  const sizeNote = arResult
+    ? `<span class="status-sub">과일 크기 ${arResult.sizeMm.toFixed(1)}mm(AR) 기준</span>`
+    : "";
+  let line;
+  if (photoResult) {
+    line = `카메라~과일 표면 거리 <strong class="status-fruit">${photoResult.distanceMm.toFixed(1)} mm</strong>`;
+  } else if (photoPoints.length === 2) {
+    line = "두 점이 같은 위치입니다. 과일 양 끝을 다시 터치하세요";
+  } else {
+    line = `흐리면 다시 찍기, 선명하면 과일 양 끝을 터치하세요 (${photoPoints.length}/2)`;
+  }
+  photoStatus.innerHTML = `${line}<br>${sizeNote}`;
 }
 
 function resizeCanvas() {
@@ -409,7 +448,7 @@ function fitToScreen() {
   const rect = canvas.getBoundingClientRect();
   const fit = Math.min(rect.width / photo.width, rect.height / photo.height);
   view.minScale = fit;
-  view.maxScale = fit * 10;
+  view.maxScale = fit * MAX_ZOOM;
   view.scale = fit;
   view.offsetX = (rect.width - photo.width * fit) / 2;
   view.offsetY = (rect.height - photo.height * fit) / 2;
@@ -422,11 +461,150 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.offsetX, dpr * view.offsetY);
   ctx.drawImage(photo, 0, 0);
+  // 점과 선은 확대 배율과 상관없이 같은 크기로 보이도록 화면 좌표로 그린다
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawPoints(ctx, photoPoints.map(photoToScreen), FRUIT_COLOR);
 }
 
-window.addEventListener("resize", () => {
+function screenToPhoto(p) {
+  return { x: (p.x - view.offsetX) / view.scale, y: (p.y - view.offsetY) / view.scale };
+}
+
+function photoToScreen(p) {
+  return { x: p.x * view.scale + view.offsetX, y: p.y * view.scale + view.offsetY };
+}
+
+// 창 크기뿐 아니라 아래 안내 문구 길이가 바뀌어 사진 영역 크기가 달라져도 다시 맞춘다(그대로 두면 사진이 찌그러짐)
+new ResizeObserver(() => {
   if (photoScreen.hidden || !photo) return;
+  const wasFit = view.scale <= view.minScale * 1.0001;
   resizeCanvas();
-  fitToScreen();
+  if (wasFit) {
+    fitToScreen();
+  } else {
+    const rect = canvas.getBoundingClientRect();
+    view.minScale = Math.min(rect.width / photo.width, rect.height / photo.height);
+    view.maxScale = view.minScale * MAX_ZOOM;
+    view.scale = clamp(view.scale, view.minScale, view.maxScale);
+    keepPhotoInView();
+  }
+  draw();
+}).observe(canvas);
+
+// ---------- 터치: 짧은 터치는 점 찍기, 한 손가락 끌기는 이동, 두 손가락은 확대·이동 ----------
+// 마우스(PC 확인용)도 같은 규칙: 클릭은 점 찍기, 드래그는 이동, 휠은 확대
+const TAP_TOLERANCE = 8; // CSS 픽셀. 손가락은 마우스보다 흔들린다
+const pointers = new Map(); // 누르고 있는 손가락 id → 위치
+let pressStart = null;
+let dragging = false;
+let tapCancelled = false;   // 두 손가락을 댔던 동작은 점 찍기로 보지 않는다
+let pinchFrom = null;       // 직전 두 손가락 거리와 가운데 { dist, mid }
+
+function canvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function pinchState() {
+  const [a, b] = [...pointers.values()];
+  return { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+}
+
+canvas.addEventListener("pointerdown", (event) => {
+  try {
+    canvas.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // 무시(실패해도 동작에는 지장 없음)
+  }
+  pointers.set(event.pointerId, canvasPoint(event));
+  if (pointers.size === 1) {
+    pressStart = canvasPoint(event);
+    dragging = false;
+    tapCancelled = false;
+  } else if (pointers.size === 2) {
+    tapCancelled = true;
+    pinchFrom = pinchState();
+  }
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!pointers.has(event.pointerId) || !photo) return;
+  const prev = pointers.get(event.pointerId);
+  const curr = canvasPoint(event);
+  pointers.set(event.pointerId, curr);
+
+  if (pointers.size >= 2) {
+    const now = pinchState();
+    if (pinchFrom) {
+      if (pinchFrom.dist > 0) zoomAt(now.mid, now.dist / pinchFrom.dist);
+      view.offsetX += now.mid.x - pinchFrom.mid.x;
+      view.offsetY += now.mid.y - pinchFrom.mid.y;
+    }
+    pinchFrom = now;
+  } else {
+    if (!dragging && Math.hypot(curr.x - pressStart.x, curr.y - pressStart.y) > TAP_TOLERANCE) dragging = true;
+    if (!dragging) return;
+    view.offsetX += curr.x - prev.x;
+    view.offsetY += curr.y - prev.y;
+  }
+  keepPhotoInView();
   draw();
 });
+
+canvas.addEventListener("pointerup", (event) => {
+  if (!pointers.has(event.pointerId)) return;
+  if (pointers.size === 1 && !dragging && !tapCancelled && photo) {
+    const p = screenToPhoto(canvasPoint(event));
+    // 사진 바깥을 터치한 경우는 무시한다
+    if (p.x >= 0 && p.y >= 0 && p.x <= photo.width && p.y <= photo.height) {
+      addPhotoPoint(p);
+      draw();
+    }
+  }
+  endPointer(event);
+});
+canvas.addEventListener("pointercancel", endPointer);
+
+function endPointer(event) {
+  pointers.delete(event.pointerId);
+  if (pointers.size < 2) pinchFrom = null;
+  if (pointers.size === 1) {
+    // 두 손가락 중 하나를 떼면 남은 손가락으로 이어서 이동한다
+    dragging = true;
+  }
+  if (pointers.size === 0) {
+    pressStart = null;
+    dragging = false;
+  }
+}
+
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  if (!photo) return;
+  const delta = event.deltaMode === 1 ? event.deltaY * 40 : event.deltaY;
+  zoomAt(canvasPoint(event), Math.exp(-delta * 0.0018));
+  keepPhotoInView();
+  draw();
+}, { passive: false });
+
+// p(화면 좌표)를 기준으로 ratio배 확대한다
+function zoomAt(p, ratio) {
+  const newScale = clamp(view.scale * ratio, view.minScale, view.maxScale);
+  const r = newScale / view.scale;
+  view.offsetX = p.x - (p.x - view.offsetX) * r;
+  view.offsetY = p.y - (p.y - view.offsetY) * r;
+  view.scale = newScale;
+}
+
+// 사진이 화면 밖으로 완전히 벗어나지 않게 한다(1차와 같음)
+function keepPhotoInView() {
+  const rect = canvas.getBoundingClientRect();
+  const w = photo.width * view.scale;
+  const h = photo.height * view.scale;
+  view.offsetX = w <= rect.width ? (rect.width - w) / 2 : clamp(view.offsetX, rect.width - w, 0);
+  view.offsetY = h <= rect.height ? (rect.height - h) / 2 : clamp(view.offsetY, rect.height - h, 0);
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
