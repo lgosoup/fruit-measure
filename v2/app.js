@@ -434,6 +434,7 @@ function updatePhotoStatus() {
     line = `흐리면 다시 찍기, 선명하면 과일 양 끝을 터치하세요 (${photoPoints.length}/2)`;
   }
   photoStatus.innerHTML = `${line}<br>${sizeNote}`;
+  document.getElementById("btn-save").disabled = !photoResult;
 }
 
 function resizeCanvas() {
@@ -607,4 +608,102 @@ function keepPhotoInView() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+// ---------- 기록 저장과 목록 ----------
+// 1차와 같은 저장 공간을 함께 쓴다. 2차 기록에는 거리가 더해진다
+// records: [{ no: 측정 번호, sizeMm: 크기, distanceMm: 표면까지 거리(1차 기록에는 없음), at: 측정 시각(ISO) }]
+const STORAGE_KEY = "fruit-measure-records";
+const recordsScreen = document.getElementById("screen-records");
+const btnSave = document.getElementById("btn-save");
+
+btnSave.addEventListener("click", saveRecord);
+document.getElementById("btn-records").addEventListener("click", showRecords);
+document.getElementById("btn-records-back").addEventListener("click", () => {
+  recordsScreen.hidden = true;
+  homeScreen.hidden = false;
+});
+
+function loadRecords() {
+  try {
+    const records = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (!Array.isArray(records)) return [];
+    // 저장된 값이 손상되어도 앱이 멈추지 않도록 형식이 맞는 기록만 쓴다(1차와 같은 기준)
+    return records.filter((r) =>
+      r && Number.isFinite(r.no) && Number.isFinite(r.sizeMm) && !Number.isNaN(new Date(r.at).getTime()));
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveRecord() {
+  if (!photoResult || !arResult) return;
+  const records = loadRecords();
+  const record = {
+    // 지운 번호가 있어도 겹치지 않도록 가장 큰 번호 다음으로 매긴다(1차와 같음)
+    no: records.reduce((max, r) => Math.max(max, r.no), 0) + 1,
+    sizeMm: Math.round(arResult.sizeMm * 10) / 10,
+    distanceMm: Math.round(photoResult.distanceMm * 10) / 10,
+    at: new Date().toISOString(),
+  };
+  records.push(record);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  } catch (error) {
+    console.error(error);
+    photoStatus.textContent = "브라우저에 저장하지 못했습니다. 저장 공간 설정을 확인해 주세요.";
+    return;
+  }
+  // 다음 과일을 바로 잴 수 있도록 AR 화면으로 돌아가 크기부터 다시 잰다
+  resetArMeasure();
+  showArUi();
+  showArNote(`${record.no}번 기록 저장됨 · 크기 ${record.sizeMm.toFixed(1)}mm · 거리 ${record.distanceMm.toFixed(1)}mm. 다음 과일을 재세요`);
+}
+
+let pendingDeleteNo = null; // 「정말 삭제」 확인을 기다리는 기록 번호
+
+function showRecords() {
+  pendingDeleteNo = null;
+  renderRecords();
+  homeScreen.hidden = true;
+  recordsScreen.hidden = false;
+}
+
+function renderRecords() {
+  const records = loadRecords();
+  const body = document.getElementById("records-body");
+  body.textContent = "";
+  for (const r of records) {
+    const row = body.insertRow();
+    row.insertCell().textContent = r.no;
+    row.insertCell().textContent = r.sizeMm.toFixed(1);
+    // 1차(PC)에서 잰 기록은 거리가 없다
+    row.insertCell().textContent = Number.isFinite(r.distanceMm) ? r.distanceMm.toFixed(1) : "–";
+    row.insertCell().textContent = new Date(r.at).toLocaleString("ko-KR");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = r.no === pendingDeleteNo ? "btn-delete btn-delete-confirm" : "btn-delete";
+    button.textContent = r.no === pendingDeleteNo ? "정말 삭제" : "삭제";
+    button.addEventListener("click", () => onDeleteClick(r.no));
+    row.insertCell().appendChild(button);
+  }
+  document.getElementById("records-empty").hidden = records.length > 0;
+  document.getElementById("records-table").hidden = records.length === 0;
+}
+
+// 처음 누르면 확인 상태로 바뀌고, 같은 줄을 한 번 더 누르면 삭제한다(1차와 같음)
+function onDeleteClick(no) {
+  if (pendingDeleteNo !== no) {
+    pendingDeleteNo = no;
+    renderRecords();
+    return;
+  }
+  pendingDeleteNo = null;
+  const records = loadRecords().filter((r) => r.no !== no);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  } catch (error) {
+    console.error(error);
+  }
+  renderRecords();
 }
