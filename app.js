@@ -352,7 +352,8 @@ function saveRecord() {
   if (fruitSizeMm === null) return;
   const records = loadRecords();
   const record = {
-    no: records.length + 1,
+    // 지운 번호가 있어도 겹치지 않도록 가장 큰 번호 다음으로 매긴다
+    no: records.reduce((max, r) => Math.max(max, r.no), 0) + 1,
     sizeMm: Math.round(fruitSizeMm * 10) / 10,
     at: new Date().toISOString(),
   };
@@ -371,7 +372,17 @@ function saveRecord() {
   draw();
 }
 
+let pendingDeleteNo = null; // 「정말 삭제」 확인을 기다리는 기록 번호
+
 function showRecords() {
+  pendingDeleteNo = null;
+  renderRecords();
+  homeScreen.hidden = true;
+  photoScreen.hidden = true;
+  recordsScreen.hidden = false;
+}
+
+function renderRecords() {
   const records = loadRecords();
   const body = document.getElementById("records-body");
   body.textContent = "";
@@ -380,12 +391,32 @@ function showRecords() {
     row.insertCell().textContent = r.no;
     row.insertCell().textContent = r.sizeMm.toFixed(1);
     row.insertCell().textContent = new Date(r.at).toLocaleString("ko-KR");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = r.no === pendingDeleteNo ? "btn-delete btn-delete-confirm" : "btn-delete";
+    button.textContent = r.no === pendingDeleteNo ? "정말 삭제" : "삭제";
+    button.addEventListener("click", () => onDeleteClick(r.no));
+    row.insertCell().appendChild(button);
   }
   document.getElementById("records-empty").hidden = records.length > 0;
   document.getElementById("records-table").hidden = records.length === 0;
-  homeScreen.hidden = true;
-  photoScreen.hidden = true;
-  recordsScreen.hidden = false;
+}
+
+// 처음 누르면 확인 상태로 바뀌고, 같은 줄을 한 번 더 누르면 삭제한다
+function onDeleteClick(no) {
+  if (pendingDeleteNo !== no) {
+    pendingDeleteNo = no;
+    renderRecords();
+    return;
+  }
+  pendingDeleteNo = null;
+  const records = loadRecords().filter((r) => r.no !== no);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  } catch (error) {
+    console.error(error);
+  }
+  renderRecords();
 }
 
 // ---------- 사진 촬영 정보(EXIF)에서 35mm 환산 초점거리 읽기 ----------

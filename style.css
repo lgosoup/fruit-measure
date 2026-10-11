@@ -235,3 +235,19 @@ body {
 .records-table td:nth-child(2) {
   font-weight: 600;
 }
+
+.btn-delete {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn-delete-confirm {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #fff;
+}
