@@ -24,6 +24,34 @@
     <p id="home-message" class="guide">AR 지원 여부를 확인하는 중입니다…</p>
   </main>
 
+  <!-- AR 화면: AR 중에는 이 요소만 카메라 화면 위에 보인다 -->
+  <section id="ar-root" class="ar" hidden>
+    <canvas id="ar-canvas" class="ar-canvas"></canvas>
+
+    <div id="ar-ui" class="ar-ui">
+      <div class="ar-top">
+        <button id="btn-ar-close" class="btn-bar" type="button">✕ 닫기</button>
+        <p id="ar-guide" class="ar-guide">폰을 천천히 움직여 테이블을 비추세요</p>
+      </div>
+      <div class="ar-bottom">
+        <button id="btn-capture" class="btn-capture" type="button">촬영</button>
+      </div>
+    </div>
+
+    <!-- 찍은 사진 화면 -->
+    <div id="screen-photo" class="photo" hidden>
+      <div class="photo-bar">
+        <button id="btn-retake" class="btn-bar" type="button">← 다시 찍기</button>
+        <span id="photo-info" class="photo-hint"></span>
+      </div>
+      <canvas id="photo-canvas" class="photo-canvas"></canvas>
+      <div class="photo-panel">
+        <p id="photo-status" class="photo-status"></p>
+      </div>
+    </div>
+  </section>
+
+  <script src="measure.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
