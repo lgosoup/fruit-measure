@@ -56,6 +56,8 @@
 }
 
 .ar-top .btn-bar {
+  flex-shrink: 0;
+  white-space: nowrap;
   background: rgba(17, 24, 39, 0.6);
 }
 
@@ -89,4 +91,43 @@
 .btn-capture:disabled {
   background: rgba(55, 65, 81, 0.8);
   color: #9ca3af;
+}
+
+.btn-point {
+  background: #0e7490;
+}
+
+/* 화면 옆 완료 표시 */
+.ar-done {
+  position: absolute;
+  right: 12px;
+  top: 30%;
+  max-width: 45%;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.75);
+  color: #f9fafb;
+  border-left: 4px solid #86efac;
+}
+
+.ar-done p {
+  margin: 0;
+}
+
+.ar-done-title {
+  color: #86efac;
+  font-weight: 700;
+}
+
+.ar-done-size {
+  margin: 4px 0 !important;
+  color: #e879f9;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.ar-done-sub {
+  color: #9ca3af;
+  font-size: 0.8rem;
+  margin-bottom: 8px !important;
 }

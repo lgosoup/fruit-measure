@@ -33,6 +33,41 @@ function intrinsicsFromProjection(p, width, height) {
   };
 }
 
+// ---------- AR 크기 측정 ----------
+// 둥근 과일은 가장 넓은 부분이 바닥에서 (크기/2)만큼 떠 있어, 가장자리를 겨눈 시선은 실제보다 바깥쪽 바닥에 닿는다
+// 측정값 m = 실제값 x H / (H - 실제값/2)  →  실제값 = m x H / (H + m/2)   (1차와 같은 보정식, H: 카메라 높이)
+function correctRoundFruit(measuredMm, heightMm) {
+  return measuredMm * heightMm / (heightMm + measuredMm / 2);
+}
+
+// 테이블 면 위 두 점(세계 좌표 m, y가 위쪽)과 카메라 위치로 과일 크기와 표면까지 거리를 구한다
+// 반환: { sizeMm, rawMm, heightMm, distanceMm } 또는 계산할 수 없으면 null
+function measureFruitAr(a, b, camera) {
+  const rawM = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  if (!(rawM > 0)) return null;
+  const tableY = (a[1] + b[1]) / 2;
+  const heightM = camera[1] - tableY;
+  if (!(heightM > 0)) return null; // 카메라가 테이블보다 낮음
+  const sizeM = correctRoundFruit(rawM, heightM);
+  const r = sizeM / 2;
+  if (!(heightM > 2 * r)) return null; // 카메라가 과일 꼭대기보다 낮음
+  // 과일 중심: 두 점의 가운데를 카메라 바로 아래 지점 쪽으로 (H - r) / H만큼 당기고, 높이 r
+  const k = (heightM - r) / heightM;
+  const mid = [(a[0] + b[0]) / 2, tableY, (a[2] + b[2]) / 2];
+  const center = [
+    camera[0] + (mid[0] - camera[0]) * k,
+    tableY + r,
+    camera[2] + (mid[2] - camera[2]) * k,
+  ];
+  const centerDistM = Math.hypot(camera[0] - center[0], camera[1] - center[1], camera[2] - center[2]);
+  return {
+    sizeMm: sizeM * 1000,
+    rawMm: rawM * 1000,
+    heightMm: heightM * 1000,
+    distanceMm: (centerDistM - r) * 1000,
+  };
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { transformPoint, projectToScreen, intrinsicsFromProjection };
+  module.exports = { transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr };
 }

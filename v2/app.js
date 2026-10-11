@@ -15,6 +15,10 @@ const canvas = document.getElementById("photo-canvas");
 const ctx = canvas.getContext("2d");
 
 const RETICLE_COLOR = "#22d3ee"; // 1차 기준선과 같은 색
+const FRUIT_COLOR = "#e879f9";   // 1차 과일선과 같은 색
+const MIN_AR_DISTANCE_MM = 300;  // AR은 30cm보다 가까우면 불안정하다
+const btnPoint = document.getElementById("btn-point");
+const arDone = document.getElementById("ar-done");
 
 // ---------- AR 지원 확인 ----------
 // 크롬(안드로이드)에서 ARCore를 쓸 수 있을 때만 측정을 시작할 수 있다
@@ -45,6 +49,10 @@ checkArSupport();
 let xr = null;
 let reticleHit = null;    // 조준점 방향으로 찾은 테이블 면 위 위치(세계 좌표 [x, y, z]). 못 찾으면 null
 let captureRequested = false;
+let pointRequested = false;
+// arPoints: 과일 양 끝을 겨눈 시선이 테이블 면에 닿은 위치(세계 좌표). arResult: 크기 측정 결과
+let arPoints = [];
+let arResult = null;
 let arNote = null;        // 잠깐 보여줄 안내 { text, until }. 매 프레임 안내에 덮이지 않게 한다
 
 function showArNote(text) {
@@ -56,6 +64,10 @@ document.getElementById("btn-ar-close").addEventListener("click", () => xr && xr
 btnCapture.addEventListener("click", () => {
   captureRequested = true;
 });
+btnPoint.addEventListener("click", () => {
+  pointRequested = true;
+});
+document.getElementById("btn-remeasure").addEventListener("click", resetArMeasure);
 
 // AR 화면 위 버튼을 누를 때 AR 쪽 터치(select)로 처리되지 않게 한다
 arRoot.addEventListener("beforexrselect", (event) => event.preventDefault());
@@ -98,6 +110,7 @@ function onArEnd() {
   reticleHit = null;
   captureRequested = false;
   arNote = null;
+  resetArMeasure();
   arRoot.hidden = true;
   photoScreen.hidden = true;
   homeScreen.hidden = false;
@@ -139,6 +152,8 @@ function onXrFrame(time, frame) {
       captureRequested = false;
       showArNote("위치를 잃어 촬영하지 못했습니다. 조금 떨어져 다시 촬영해 주세요");
     }
+    pointRequested = false;
+    btnPoint.disabled = true;
     setArGuide(time, "위치를 잃었습니다. 폰을 천천히 움직여 테이블을 비추세요");
     drawArOverlay(null);
     return;
@@ -152,7 +167,23 @@ function onXrFrame(time, frame) {
   } else {
     reticleHit = null;
   }
-  setArGuide(time, reticleHit ? "테이블을 찾았습니다" : "폰을 천천히 움직여 테이블을 비추세요");
+  if (pointRequested) {
+    pointRequested = false;
+    if (reticleHit) {
+      const c = pose.transform.position;
+      addArPoint(reticleHit, [c.x, c.y, c.z]);
+    } else {
+      showArNote("테이블을 찾은 뒤 점을 찍어 주세요");
+    }
+  }
+  btnPoint.disabled = !reticleHit || arResult !== null;
+  btnCapture.disabled = arResult === null;
+
+  let guide;
+  if (arResult) guide = "원하는 위치로 다가가 과일이 화면에 다 들어오게 촬영하세요";
+  else if (!reticleHit) guide = "폰을 천천히 움직여 테이블을 비추세요";
+  else guide = `30cm 이상 떨어져 조준점을 과일 가장자리에 맞추고 점 찍기 (${arPoints.length}/2)`;
+  setArGuide(time, guide);
 
   if (captureRequested) {
     captureRequested = false;
@@ -167,7 +198,40 @@ function setArGuide(time, text) {
   if (arGuide.textContent !== text) arGuide.textContent = text;
 }
 
-// ---------- AR 화면 위 표시(조준점) ----------
+// ---------- AR 크기 측정 ----------
+function resetArMeasure() {
+  arNote = null;
+  arPoints = [];
+  arResult = null;
+  arDone.hidden = true;
+  btnCapture.disabled = true;
+}
+
+function addArPoint(hit, cameraPosition) {
+  if (arPoints.length === 2) arPoints = [];
+  arPoints.push(hit);
+  if (arPoints.length < 2) return;
+
+  const result = measureFruitAr(arPoints[0], arPoints[1], cameraPosition);
+  if (!result) {
+    arPoints = [];
+    showArNote("두 점이 같은 위치이거나 계산할 수 없습니다. 과일 양 끝을 다시 찍어 주세요");
+    return;
+  }
+  if (result.distanceMm < MIN_AR_DISTANCE_MM) {
+    arPoints = [];
+    showArNote(`너무 가깝습니다(약 ${(result.distanceMm / 10).toFixed(0)}cm). 30cm 이상 떨어져 다시 찍어 주세요`);
+    return;
+  }
+  arResult = result;
+  arNote = null; // 앞선 실패 안내는 지운다
+  document.getElementById("ar-done-size").textContent = result.sizeMm.toFixed(1);
+  document.getElementById("ar-done-sub").textContent =
+    `보정 전 ${result.rawMm.toFixed(1)}mm · 거리 ${(result.distanceMm / 10).toFixed(1)}cm`;
+  arDone.hidden = false;
+}
+
+// ---------- AR 화면 위 표시(조준점, 과일 점) ----------
 function drawArOverlay(view) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -175,6 +239,14 @@ function drawArOverlay(view) {
   arCtx.setTransform(1, 0, 0, 1, 0, 0);
   arCtx.clearRect(0, 0, arCanvas.width, arCanvas.height);
   arCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // 찍은 과일 점과 선
+  if (view && arPoints.length > 0) {
+    const screen = arPoints
+      .map((p) => projectToScreen(p, view.transform.inverse.matrix, view.projectionMatrix, w, h))
+      .filter(Boolean);
+    drawPoints(arCtx, screen, FRUIT_COLOR);
+  }
 
   // 조준점: 면을 찾으면 청록, 못 찾으면 회색
   const cx = w / 2;
@@ -192,6 +264,27 @@ function drawArOverlay(view) {
   arCtx.moveTo(cx, cy + 6);
   arCtx.lineTo(cx, cy + 24);
   arCtx.stroke();
+}
+
+// 점과 선(1차와 같은 모양). points: 화면 좌표
+function drawPoints(context, points, color) {
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  context.lineWidth = 2;
+  if (points.length === 2) {
+    context.beginPath();
+    context.moveTo(points[0].x, points[0].y);
+    context.lineTo(points[1].x, points[1].y);
+    context.stroke();
+  }
+  for (const p of points) {
+    context.beginPath();
+    context.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    context.stroke();
+    context.beginPath();
+    context.arc(p.x, p.y, 2, 0, Math.PI * 2);
+    context.fill();
+  }
 }
 
 // ---------- 촬영: AR 화면과 같은 카메라 이미지를 가져온다 ----------
