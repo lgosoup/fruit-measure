@@ -129,8 +129,23 @@ body {
   font-size: 0.95rem;
 }
 
-.photo-status strong {
+.photo-status {
+  line-height: 1.6;
+}
+
+.status-card {
   color: #22d3ee;
+}
+
+.status-fruit {
+  color: #e879f9;
+  font-size: 1.2rem;
+}
+
+.photo-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .photo-canvas {

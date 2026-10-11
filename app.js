@@ -21,6 +21,11 @@ const CARD_COLOR = "#22d3ee";
 let cardPoints = [];
 let mmPerPixel = null; // 원본 사진 1픽셀이 실제 몇 mm인지
 
+// 과일: 기준 설정 후 양 끝 점(원본 사진 픽셀 좌표)
+const FRUIT_COLOR = "#e879f9"; // 주황·초록 과일 위에서도 잘 보이는 색
+let fruitPoints = [];
+let fruitSizeMm = null;
+
 // ---------- 첫 화면 버튼 ----------
 document.getElementById("btn-open").addEventListener("click", () => inputPhoto.click());
 document.getElementById("btn-records").addEventListener("click", () => {
@@ -29,6 +34,10 @@ document.getElementById("btn-records").addEventListener("click", () => {
 document.getElementById("btn-back").addEventListener("click", showHome);
 document.getElementById("btn-reset-card").addEventListener("click", () => {
   resetCard();
+  draw();
+});
+document.getElementById("btn-reset-fruit").addEventListener("click", () => {
+  resetFruit();
   draw();
 });
 
@@ -96,6 +105,7 @@ function draw() {
   // 점과 선은 확대 배율과 상관없이 같은 크기로 보이도록 화면 좌표로 그린다
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawPoints(cardPoints, CARD_COLOR);
+  drawPoints(fruitPoints, FRUIT_COLOR);
 }
 
 function drawPoints(points, color) {
@@ -129,9 +139,12 @@ function photoToScreen(p) {
 }
 
 // ---------- 신용카드 기준 지정 ----------
+// 기준이 바뀌면 과일 크기도 다시 재야 하므로 과일 점도 지운다
 function resetCard() {
   cardPoints = [];
   mmPerPixel = null;
+  fruitPoints = [];
+  fruitSizeMm = null;
   updateStatus();
 }
 
@@ -147,15 +160,41 @@ function addCardPoint(photoPoint) {
   updateStatus();
 }
 
+// ---------- 과일 크기 측정 ----------
+function resetFruit() {
+  fruitPoints = [];
+  fruitSizeMm = null;
+  updateStatus();
+}
+
+function addFruitPoint(photoPoint) {
+  // 이미 두 점이 있으면 새로 측정을 시작한다
+  if (fruitPoints.length === 2) resetFruit();
+  fruitPoints.push(photoPoint);
+  if (fruitPoints.length === 2) {
+    const [a, b] = fruitPoints;
+    fruitSizeMm = Math.hypot(a.x - b.x, a.y - b.y) * mmPerPixel;
+  }
+  updateStatus();
+}
+
+function isCardSet() {
+  return cardPoints.length === 2 && mmPerPixel !== null;
+}
+
 function updateStatus() {
-  if (cardPoints.length < 2 || !mmPerPixel) {
+  if (!isCardSet()) {
     photoStatus.textContent = `신용카드 가로 양 끝을 클릭하세요 (${cardPoints.length}/2)`;
     return;
   }
   const [a, b] = cardPoints;
   const lengthPx = Math.hypot(a.x - b.x, a.y - b.y);
-  photoStatus.innerHTML =
-    `<strong>기준 설정됨</strong> · 카드 ${lengthPx.toFixed(0)}px = ${CARD_WIDTH_MM}mm · 1px = ${mmPerPixel.toFixed(4)}mm`;
+  const cardLine =
+    `<span class="status-card">기준 설정됨 · 카드 ${lengthPx.toFixed(0)}px = ${CARD_WIDTH_MM}mm · 1px = ${mmPerPixel.toFixed(4)}mm</span>`;
+  const fruitLine = fruitSizeMm === null
+    ? `과일 양 끝을 클릭하세요 (${fruitPoints.length}/2)`
+    : `과일 크기 <strong class="status-fruit">${fruitSizeMm.toFixed(1)} mm</strong>`;
+  photoStatus.innerHTML = `${cardLine}<br>${fruitLine}`;
 }
 
 // 브라우저 창 크기가 바뀌면 다시 맞춘다
@@ -209,7 +248,9 @@ canvas.addEventListener("pointerup", (event) => {
     const p = screenToPhoto(canvasPoint(event));
     // 사진 바깥을 클릭한 경우는 무시한다
     if (p.x >= 0 && p.y >= 0 && p.x <= photo.width && p.y <= photo.height) {
-      addCardPoint(p);
+      // 기준이 정해지기 전에는 카드 점, 정해진 뒤에는 과일 점을 찍는다
+      if (isCardSet()) addFruitPoint(p);
+      else addCardPoint(p);
       draw();
     }
   }
