@@ -142,6 +142,27 @@ body {
   font-size: 1.2rem;
 }
 
+.btn-save {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-save:disabled {
+  background: #374151;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+
+.status-saved {
+  color: #86efac;
+}
+
 .status-sub {
   color: #9ca3af;
   font-size: 0.85rem;
@@ -160,4 +181,57 @@ body {
   display: block;
   /* 브라우저 기본 스크롤·확대 대신 직접 처리 */
   touch-action: none;
+}
+
+/* 기록 화면 */
+.records {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.records-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.records-bar h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.records .btn-bar {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.records-empty {
+  color: var(--muted);
+}
+
+.records-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.records-table th,
+.records-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.records-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.records-table td:nth-child(2) {
+  font-weight: 600;
 }

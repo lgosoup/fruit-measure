@@ -4,6 +4,8 @@ const photoScreen = document.getElementById("screen-photo");
 const homeMessage = document.getElementById("home-message");
 const inputPhoto = document.getElementById("input-photo");
 const photoStatus = document.getElementById("photo-status");
+const recordsScreen = document.getElementById("screen-records");
+const btnSave = document.getElementById("btn-save");
 const canvas = document.getElementById("photo-canvas");
 const ctx = canvas.getContext("2d");
 
@@ -33,9 +35,9 @@ const FULL_FRAME_DIAGONAL_MM = 43.267; // 35mm 필름 36x24mm의 대각선
 
 // ---------- 첫 화면 버튼 ----------
 document.getElementById("btn-open").addEventListener("click", () => inputPhoto.click());
-document.getElementById("btn-records").addEventListener("click", () => {
-  homeMessage.textContent = "기록 기능은 준비 중입니다.";
-});
+document.getElementById("btn-records").addEventListener("click", showRecords);
+document.getElementById("btn-records-back").addEventListener("click", showHome);
+btnSave.addEventListener("click", saveRecord);
 document.getElementById("btn-back").addEventListener("click", showHome);
 document.getElementById("btn-reset-card").addEventListener("click", () => {
   resetCard();
@@ -70,6 +72,7 @@ async function onFileSelected(event) {
 // ---------- 화면 전환 ----------
 function showHome() {
   photoScreen.hidden = true;
+  recordsScreen.hidden = true;
   homeScreen.hidden = false;
 }
 
@@ -168,7 +171,10 @@ function addCardPoint(photoPoint) {
 }
 
 // ---------- 과일 크기 측정 ----------
+let saveNote = null; // 방금 저장한 기록 안내(다음 클릭 때까지 표시)
+
 function resetFruit() {
+  saveNote = null;
   fruitPoints = [];
   fruitSizeMm = null;
   fruitMeasuredMm = null;
@@ -193,6 +199,7 @@ function correctRoundFruit(measuredMm, heightMm) {
 function addFruitPoint(photoPoint) {
   // 이미 두 점이 있으면 새로 측정을 시작한다
   if (fruitPoints.length === 2) resetFruit();
+  saveNote = null;
   fruitPoints.push(photoPoint);
   if (fruitPoints.length === 2) {
     const [a, b] = fruitPoints;
@@ -208,6 +215,7 @@ function isCardSet() {
 }
 
 function updateStatus() {
+  btnSave.disabled = fruitSizeMm === null;
   if (!isCardSet()) {
     photoStatus.textContent = `신용카드 가로 양 끝을 클릭하세요 (${cardPoints.length}/2)`;
     return;
@@ -227,7 +235,8 @@ function updateStatus() {
     const raw = height ? ` <span class="status-sub">(보정 전 ${fruitMeasuredMm.toFixed(1)}mm)</span>` : "";
     fruitLine = `과일 크기 <strong class="status-fruit">${fruitSizeMm.toFixed(1)} mm</strong>${raw}`;
   }
-  photoStatus.innerHTML = `${cardLine}${heightNote}<br>${fruitLine}`;
+  const savedLine = saveNote ? `<br><span class="status-saved">${saveNote}</span>` : "";
+  photoStatus.innerHTML = `${cardLine}${heightNote}<br>${fruitLine}${savedLine}`;
 }
 
 // 브라우저 창 크기가 바뀌면 다시 맞춘다
@@ -324,6 +333,59 @@ function keepPhotoInView() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+// ---------- 기록 저장과 목록 ----------
+// records: [{ no: 측정 번호(측정한 순서), sizeMm: 보정한 크기, at: 측정 시각(ISO) }]
+const STORAGE_KEY = "fruit-measure-records";
+
+function loadRecords() {
+  try {
+    const records = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    return Array.isArray(records) ? records : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveRecord() {
+  if (fruitSizeMm === null) return;
+  const records = loadRecords();
+  const record = {
+    no: records.length + 1,
+    sizeMm: Math.round(fruitSizeMm * 10) / 10,
+    at: new Date().toISOString(),
+  };
+  records.push(record);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  } catch (error) {
+    console.error(error);
+    photoStatus.textContent = "브라우저에 저장하지 못했습니다. 저장 공간 설정을 확인해 주세요.";
+    return;
+  }
+  // 같은 사진의 다음 과일을 바로 잴 수 있도록 과일 점만 지운다(카드 기준은 유지)
+  resetFruit();
+  saveNote = `${record.no}번 기록 저장됨 · ${record.sizeMm.toFixed(1)} mm`;
+  updateStatus();
+  draw();
+}
+
+function showRecords() {
+  const records = loadRecords();
+  const body = document.getElementById("records-body");
+  body.textContent = "";
+  for (const r of records) {
+    const row = body.insertRow();
+    row.insertCell().textContent = r.no;
+    row.insertCell().textContent = r.sizeMm.toFixed(1);
+    row.insertCell().textContent = new Date(r.at).toLocaleString("ko-KR");
+  }
+  document.getElementById("records-empty").hidden = records.length > 0;
+  document.getElementById("records-table").hidden = records.length === 0;
+  homeScreen.hidden = true;
+  photoScreen.hidden = true;
+  recordsScreen.hidden = false;
 }
 
 // ---------- 사진 촬영 정보(EXIF)에서 35mm 환산 초점거리 읽기 ----------

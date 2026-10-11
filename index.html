@@ -35,10 +35,26 @@
     <div class="photo-panel">
       <p id="photo-status" class="photo-status"></p>
       <div class="photo-actions">
+        <button id="btn-save" class="btn-save" type="button" disabled>기록 저장</button>
         <button id="btn-reset-fruit" class="btn-bar" type="button">과일 다시 측정</button>
         <button id="btn-reset-card" class="btn-bar" type="button">기준 다시 지정</button>
       </div>
     </div>
+  </section>
+
+  <!-- 기록 화면 -->
+  <section id="screen-records" class="records" hidden>
+    <div class="records-bar">
+      <button id="btn-records-back" class="btn-bar" type="button">← 처음으로</button>
+      <h2>측정 기록</h2>
+    </div>
+    <p id="records-empty" class="records-empty">아직 저장된 기록이 없습니다.</p>
+    <table id="records-table" class="records-table" hidden>
+      <thead>
+        <tr><th>번호</th><th>크기(mm)</th><th>측정 시각</th></tr>
+      </thead>
+      <tbody id="records-body"></tbody>
+    </table>
   </section>
 
   <script src="app.js"></script>
