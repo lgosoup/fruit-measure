@@ -24,7 +24,12 @@ let mmPerPixel = null; // 원본 사진 1픽셀이 실제 몇 mm인지
 // 과일: 기준 설정 후 양 끝 점(원본 사진 픽셀 좌표)
 const FRUIT_COLOR = "#e879f9"; // 주황·초록 과일 위에서도 잘 보이는 색
 let fruitPoints = [];
-let fruitSizeMm = null;
+let fruitSizeMm = null;      // 보정한 크기
+let fruitMeasuredMm = null;  // 보정 전 크기(카드와 같은 높이로 본 값)
+
+// 사진의 35mm 환산 초점거리(EXIF). 없으면 null
+let focal35 = null;
+const FULL_FRAME_DIAGONAL_MM = 43.267; // 35mm 필름 36x24mm의 대각선
 
 // ---------- 첫 화면 버튼 ----------
 document.getElementById("btn-open").addEventListener("click", () => inputPhoto.click());
@@ -53,6 +58,7 @@ async function onFileSelected(event) {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
     if (photo) photo.close();
     photo = bitmap;
+    focal35 = await readFocalLength35(file);
     resetCard();
     showPhoto();
   } catch (error) {
@@ -145,6 +151,7 @@ function resetCard() {
   mmPerPixel = null;
   fruitPoints = [];
   fruitSizeMm = null;
+  fruitMeasuredMm = null;
   updateStatus();
 }
 
@@ -164,7 +171,23 @@ function addCardPoint(photoPoint) {
 function resetFruit() {
   fruitPoints = [];
   fruitSizeMm = null;
+  fruitMeasuredMm = null;
   updateStatus();
+}
+
+// 카메라에서 카드(테이블)까지의 높이(mm). 초점거리를 모르면 null
+// 높이 = 초점거리(px) x (사진 1px이 카드에서 차지하는 mm)
+function cameraHeightMm() {
+  if (!focal35 || !mmPerPixel) return null;
+  const diagonalPx = Math.hypot(photo.width, photo.height);
+  const focalPx = focal35 * diagonalPx / FULL_FRAME_DIAGONAL_MM;
+  return focalPx * mmPerPixel;
+}
+
+// 둥근 과일은 가장 넓은 부분이 바닥에서 (크기/2)만큼 떠 있어 카메라에 가까운 만큼 크게 찍힌다
+// 측정값 m = 실제값 x H / (H - 실제값/2)  →  실제값 = m x H / (H + m/2)
+function correctRoundFruit(measuredMm, heightMm) {
+  return measuredMm * heightMm / (heightMm + measuredMm / 2);
 }
 
 function addFruitPoint(photoPoint) {
@@ -173,7 +196,9 @@ function addFruitPoint(photoPoint) {
   fruitPoints.push(photoPoint);
   if (fruitPoints.length === 2) {
     const [a, b] = fruitPoints;
-    fruitSizeMm = Math.hypot(a.x - b.x, a.y - b.y) * mmPerPixel;
+    fruitMeasuredMm = Math.hypot(a.x - b.x, a.y - b.y) * mmPerPixel;
+    const height = cameraHeightMm();
+    fruitSizeMm = height ? correctRoundFruit(fruitMeasuredMm, height) : fruitMeasuredMm;
   }
   updateStatus();
 }
@@ -191,10 +216,18 @@ function updateStatus() {
   const lengthPx = Math.hypot(a.x - b.x, a.y - b.y);
   const cardLine =
     `<span class="status-card">기준 설정됨 · 카드 ${lengthPx.toFixed(0)}px = ${CARD_WIDTH_MM}mm · 1px = ${mmPerPixel.toFixed(4)}mm</span>`;
-  const fruitLine = fruitSizeMm === null
-    ? `과일 양 끝을 클릭하세요 (${fruitPoints.length}/2)`
-    : `과일 크기 <strong class="status-fruit">${fruitSizeMm.toFixed(1)} mm</strong>`;
-  photoStatus.innerHTML = `${cardLine}<br>${fruitLine}`;
+  const height = cameraHeightMm();
+  const heightNote = height
+    ? ` · 카메라 높이 약 ${(height / 10).toFixed(0)}cm`
+    : " · 촬영 정보(초점거리)가 없어 둥근 과일 보정을 못 함";
+  let fruitLine;
+  if (fruitSizeMm === null) {
+    fruitLine = `과일 양 끝을 클릭하세요 (${fruitPoints.length}/2)`;
+  } else {
+    const raw = height ? ` <span class="status-sub">(보정 전 ${fruitMeasuredMm.toFixed(1)}mm)</span>` : "";
+    fruitLine = `과일 크기 <strong class="status-fruit">${fruitSizeMm.toFixed(1)} mm</strong>${raw}`;
+  }
+  photoStatus.innerHTML = `${cardLine}${heightNote}<br>${fruitLine}`;
 }
 
 // 브라우저 창 크기가 바뀌면 다시 맞춘다
@@ -291,4 +324,47 @@ function keepPhotoInView() {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+// ---------- 사진 촬영 정보(EXIF)에서 35mm 환산 초점거리 읽기 ----------
+// JPEG 앞부분의 EXIF를 직접 해석한다. 없거나 읽지 못하면 null
+async function readFocalLength35(file) {
+  try {
+    const view = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+    if (view.getUint16(0) !== 0xffd8) return null; // JPEG가 아님
+    let pos = 2;
+    while (pos + 4 < view.byteLength) {
+      const marker = view.getUint16(pos);
+      const size = view.getUint16(pos + 2);
+      if (marker === 0xffe1 && view.getUint32(pos + 4) === 0x45786966) { // "Exif"
+        return findFocal35(view, pos + 10);
+      }
+      if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) return null;
+      pos += 2 + size;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  return null;
+}
+
+function findFocal35(view, tiff) {
+  const little = view.getUint16(tiff) === 0x4949;
+  const u16 = (o) => view.getUint16(o, little);
+  const u32 = (o) => view.getUint32(o, little);
+  // IFD 안에서 태그 값 위치를 찾는다(항목 12바이트: 태그2, 형식2, 개수4, 값4)
+  const findTag = (ifd, tag) => {
+    const count = u16(ifd);
+    for (let i = 0; i < count; i++) {
+      const entry = ifd + 2 + i * 12;
+      if (u16(entry) === tag) return entry;
+    }
+    return null;
+  };
+  const exifPointer = findTag(tiff + u32(tiff + 4), 0x8769);
+  if (exifPointer === null) return null;
+  const focal = findTag(tiff + u32(exifPointer + 8), 0xa405); // FocalLengthIn35mmFilm
+  if (focal === null) return null;
+  const value = u16(focal + 8);
+  return value > 0 ? value : null;
 }
