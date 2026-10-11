@@ -203,9 +203,13 @@ function addFruitPoint(photoPoint) {
   fruitPoints.push(photoPoint);
   if (fruitPoints.length === 2) {
     const [a, b] = fruitPoints;
-    fruitMeasuredMm = Math.hypot(a.x - b.x, a.y - b.y) * mmPerPixel;
-    const height = cameraHeightMm();
-    fruitSizeMm = height ? correctRoundFruit(fruitMeasuredMm, height) : fruitMeasuredMm;
+    const lengthPx = Math.hypot(a.x - b.x, a.y - b.y);
+    // 두 점이 같은 위치면 크기를 만들지 않는다(0mm 기록 방지)
+    if (lengthPx > 0) {
+      fruitMeasuredMm = lengthPx * mmPerPixel;
+      const height = cameraHeightMm();
+      fruitSizeMm = height ? correctRoundFruit(fruitMeasuredMm, height) : fruitMeasuredMm;
+    }
   }
   updateStatus();
 }
@@ -217,7 +221,9 @@ function isCardSet() {
 function updateStatus() {
   btnSave.disabled = fruitSizeMm === null;
   if (!isCardSet()) {
-    photoStatus.textContent = `신용카드 가로 양 끝을 클릭하세요 (${cardPoints.length}/2)`;
+    photoStatus.textContent = cardPoints.length === 2
+      ? "두 점이 같은 위치입니다. 신용카드 양 끝을 다시 클릭하세요"
+      : `신용카드 가로 양 끝을 클릭하세요 (${cardPoints.length}/2)`;
     return;
   }
   const [a, b] = cardPoints;
@@ -230,7 +236,9 @@ function updateStatus() {
     : " · 촬영 정보(초점거리)가 없어 둥근 과일 보정을 못 함";
   let fruitLine;
   if (fruitSizeMm === null) {
-    fruitLine = `과일 양 끝을 클릭하세요 (${fruitPoints.length}/2)`;
+    fruitLine = fruitPoints.length === 2
+      ? "두 점이 같은 위치입니다. 과일 양 끝을 다시 클릭하세요"
+      : `과일 양 끝을 클릭하세요 (${fruitPoints.length}/2)`;
   } else {
     const raw = height ? ` <span class="status-sub">(보정 전 ${fruitMeasuredMm.toFixed(1)}mm)</span>` : "";
     fruitLine = `과일 크기 <strong class="status-fruit">${fruitSizeMm.toFixed(1)} mm</strong>${raw}`;
@@ -342,7 +350,10 @@ const STORAGE_KEY = "fruit-measure-records";
 function loadRecords() {
   try {
     const records = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    return Array.isArray(records) ? records : [];
+    if (!Array.isArray(records)) return [];
+    // 저장된 값이 손상되어도 앱이 멈추지 않도록 형식이 맞는 기록만 쓴다
+    return records.filter((r) =>
+      r && Number.isFinite(r.no) && Number.isFinite(r.sizeMm) && !Number.isNaN(new Date(r.at).getTime()));
   } catch (error) {
     return [];
   }
