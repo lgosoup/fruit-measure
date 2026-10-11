@@ -1,0 +1,21 @@
+/* 1차 style.css를 이어받고, 2차에서 추가하는 것만 둔다 */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.9rem;
+  vertical-align: middle;
+}
+
+.guide-warn {
+  color: #b45309;
+}
+
+.btn:disabled {
+  background: #d1d5db;
+  color: #6b7280;
+  cursor: not-allowed;
+}
