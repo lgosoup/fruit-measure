@@ -65,6 +65,8 @@ function measureFruitAr(a, b, camera) {
     rawMm: rawM * 1000,
     heightMm: heightM * 1000,
     distanceMm: (centerDistM - r) * 1000,
+    center,
+    radiusM: r,
   };
 }
 
@@ -89,9 +91,119 @@ function distanceFromPhoto(p1, p2, intrinsics, sizeMm) {
   return { distanceMm: centerMm - r, centerMm };
 }
 
+// ---------- 구의 윤곽(원뿔) ----------
+// 카메라에서 구를 보면 윤곽을 지나는 시선은 모두 「카메라→구 중심」 축과 같은 각도 α를 이룬다(원뿔).
+// 윤곽 위 시선(단위 벡터) u마다 u·d = cos α 이므로, w = d / cos α 로 두면 u·w = 1 인 일차식이 된다.
+// rays: 단위 벡터 배열(3개 이상). 반환: { d: 축(단위 벡터), cosA, sinA, alpha } 또는 null
+function fitCone(rays) {
+  if (rays.length < 3) return null;
+  const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const b = [0, 0, 0];
+  for (const u of rays) {
+    for (let i = 0; i < 3; i++) {
+      b[i] += u[i];
+      for (let j = 0; j < 3; j++) A[i][j] += u[i] * u[j];
+    }
+  }
+  const w = solve3(A, b);
+  if (!w) return null;
+  const len = Math.hypot(w[0], w[1], w[2]);
+  const cosA = 1 / len;
+  if (!(cosA > 0 && cosA < 1)) return null;
+  const d = [w[0] / len, w[1] / len, w[2] / len];
+  const sinA = Math.sqrt(1 - cosA * cosA);
+  return { d, cosA, sinA, alpha: Math.acos(cosA) };
+}
+
+// 3x3 연립방정식(크라메르 공식). 풀 수 없으면 null
+function solve3(A, b) {
+  const det = (m) =>
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const D = det(A);
+  if (!(Math.abs(D) > 1e-12)) return null;
+  return [0, 1, 2].map((k) => det(A.map((row, i) => row.map((v, j) => (j === k ? b[i] : v)))) / D);
+}
+
+// 시선 u가 원뿔 윤곽에서 벗어난 각도(라디안)
+function coneError(cone, u) {
+  const dot = u[0] * cone.d[0] + u[1] * cone.d[1] + u[2] * cone.d[2];
+  return Math.abs(Math.acos(Math.min(1, Math.max(-1, dot))) - cone.alpha);
+}
+
+// 원뿔 윤곽을 사진 위 점(px) n개로. 화면에 둘레를 그릴 때 쓴다
+function coneOutline(cone, k, n = 72) {
+  const d = cone.d;
+  // d에 수직인 두 방향
+  const t = Math.abs(d[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const e1 = normalize(cross(d, t));
+  const e2 = cross(d, e1);
+  const points = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const u = [0, 1, 2].map((j) => cone.cosA * d[j] + cone.sinA * (Math.cos(a) * e1[j] + Math.sin(a) * e2[j]));
+    if (u[2] <= 0) continue;
+    points.push({ x: k.cx + k.fx * u[0] / u[2], y: k.cy + k.fy * u[1] / u[2] });
+  }
+  return points;
+}
+
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function normalize(v) {
+  const len = Math.hypot(v[0], v[1], v[2]);
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+// 원뿔과 과일 지름으로 표면까지 거리: 중심까지 거리 = 반지름 / sin α (양 끝 두 점으로 구할 때와 같은 식)
+function distanceFromCone(cone, sizeMm) {
+  if (!cone || !(sizeMm > 0)) return null;
+  const r = sizeMm / 2;
+  const centerMm = r / cone.sinA;
+  return { distanceMm: centerMm - r, centerMm };
+}
+
+// 사진 방향(x 오른쪽, y 아래, z 앞)을 WebXR 카메라 방향(y 위, -z 앞)으로 바꾼 뒤 세계 방향으로 돌린다
+// cameraMatrix: view.transform.matrix (카메라 → 세계)
+function cameraDirToWorld(cameraMatrix, v) {
+  const c = [v[0], -v[1], -v[2]];
+  const m = cameraMatrix;
+  return [
+    m[0] * c[0] + m[4] * c[1] + m[8] * c[2],
+    m[1] * c[0] + m[5] * c[1] + m[9] * c[2],
+    m[2] * c[0] + m[6] * c[1] + m[10] * c[2],
+  ];
+}
+
+// AR: 테이블 위에 놓인 구는 중심이 테이블에서 반지름 r만큼 떠 있다.
+// 중심 = 카메라 + (r / sin α) · d  이고 중심 높이 = 테이블 + r 이므로
+// H + (r / sin α) · d_y = r  →  r = H / (1 - d_y / sin α)   (H: 카메라 높이, d_y: 축의 위 방향 성분, 내려다보면 음수)
+// 보정식 없이 바로 구해진다. dWorld: 세계 좌표 축(단위 벡터), camera: 카메라 위치, tableY: 테이블 높이(m)
+// 반환: { sizeMm, heightMm, distanceMm, center, radiusM } 또는 계산할 수 없으면 null
+function measureFruitCone(dWorld, sinA, camera, tableY) {
+  const heightM = camera[1] - tableY;
+  if (!(heightM > 0) || !(sinA > 0)) return null;
+  const denom = 1 - dWorld[1] / sinA;
+  if (!(denom > 1)) return null; // 축이 테이블 쪽을 향하지 않음
+  const r = heightM / denom;
+  const centerDistM = r / sinA;
+  const center = [0, 1, 2].map((i) => camera[i] + centerDistM * dWorld[i]);
+  return {
+    sizeMm: 2 * r * 1000,
+    heightMm: heightM * 1000,
+    distanceMm: (centerDistM - r) * 1000,
+    center,
+    radiusM: r,
+  };
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr,
-    pixelToRay, distanceFromPhoto,
+    pixelToRay, distanceFromPhoto, fitCone, coneError, coneOutline, distanceFromCone, cameraDirToWorld,
+    measureFruitCone, normalize,
   };
 }

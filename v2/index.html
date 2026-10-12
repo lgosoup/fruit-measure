@@ -41,8 +41,9 @@
         <button id="btn-remeasure" class="btn-bar" type="button">크기 다시 재기</button>
       </div>
       <div class="ar-bottom">
+        <button id="btn-detect" class="btn-capture" type="button" disabled>과일 인식</button>
         <button id="btn-point" class="btn-capture btn-point" type="button" disabled>점 찍기</button>
-        <button id="btn-capture" class="btn-capture" type="button" disabled>촬영</button>
+        <button id="btn-capture" class="btn-capture" type="button" hidden>촬영</button>
       </div>
     </div>
 
@@ -58,6 +59,7 @@
         <div class="photo-actions">
           <button id="btn-save" class="btn-save" type="button" disabled>기록 저장</button>
           <button id="btn-reset-fruit" class="btn-bar" type="button">과일 다시 지정</button>
+          <button id="btn-photo-mode" class="btn-bar" type="button">직접 지정</button>
         </div>
       </div>
     </div>
@@ -79,6 +81,7 @@
   </section>
 
   <script src="measure.js"></script>
+  <script src="detect.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
