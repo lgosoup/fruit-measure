@@ -11,33 +11,55 @@
   <!-- 첫 화면 -->
   <main id="screen-home" class="home">
     <header class="home-header">
-      <h1>fruit-measure</h1>
-      <p class="subtitle">신용카드와 함께 찍어 과일 크기를 측정합니다</p>
+      <h1>fruit-measure <span class="badge">AR</span></h1>
+      <p class="subtitle">AR로 과일 크기를 재고, 가까이서 찍은 사진으로 거리를 계산합니다</p>
     </header>
 
     <div class="actions">
-      <button id="btn-open" class="btn btn-primary" type="button">사진 불러오기</button>
+      <button id="btn-start" class="btn btn-primary" type="button" disabled>측정 시작</button>
       <button id="btn-records" class="btn btn-secondary" type="button">기록 보기</button>
     </div>
 
-    <p id="home-message" class="guide">과일과 신용카드를 테이블 위에 나란히 놓고 위에서 찍은 사진을 불러오세요.</p>
-
-    <input id="input-photo" type="file" accept="image/*" hidden>
+    <p id="home-message" class="guide">AR 지원 여부를 확인하는 중입니다…</p>
   </main>
 
-  <!-- 사진 화면 -->
-  <section id="screen-photo" class="photo" hidden>
-    <div class="photo-bar">
-      <button id="btn-back" class="btn-bar" type="button">← 처음으로</button>
-      <span class="photo-hint">휠로 확대, 드래그로 이동, 클릭으로 점 찍기</span>
+  <!-- AR 화면: AR 중에는 이 요소만 카메라 화면 위에 보인다 -->
+  <section id="ar-root" class="ar" hidden>
+    <canvas id="ar-canvas" class="ar-canvas"></canvas>
+
+    <div id="ar-ui" class="ar-ui">
+      <div class="ar-top">
+        <button id="btn-ar-close" class="btn-bar" type="button">✕ 닫기</button>
+        <p id="ar-guide" class="ar-guide">폰을 천천히 움직여 테이블을 비추세요</p>
+      </div>
+      <!-- 크기 측정이 끝나면 화면 옆에 뜨는 완료 표시 -->
+      <div id="ar-done" class="ar-done" hidden>
+        <p class="ar-done-title">✓ 기준 잡힘</p>
+        <p class="ar-done-size"><span id="ar-done-size"></span> mm</p>
+        <p id="ar-done-sub" class="ar-done-sub"></p>
+        <button id="btn-remeasure" class="btn-bar" type="button">크기 다시 재기</button>
+      </div>
+      <div class="ar-bottom">
+        <button id="btn-detect" class="btn-capture" type="button" disabled>과일 인식</button>
+        <button id="btn-point" class="btn-capture btn-point" type="button" disabled>점 찍기</button>
+        <button id="btn-capture" class="btn-capture" type="button" hidden>촬영</button>
+      </div>
     </div>
-    <canvas id="photo-canvas" class="photo-canvas"></canvas>
-    <div class="photo-panel">
-      <p id="photo-status" class="photo-status"></p>
-      <div class="photo-actions">
-        <button id="btn-save" class="btn-save" type="button" disabled>기록 저장</button>
-        <button id="btn-reset-fruit" class="btn-bar" type="button">과일 다시 측정</button>
-        <button id="btn-reset-card" class="btn-bar" type="button">기준 다시 지정</button>
+
+    <!-- 찍은 사진 화면 -->
+    <div id="screen-photo" class="photo" hidden>
+      <div class="photo-bar">
+        <button id="btn-retake" class="btn-bar" type="button">← 다시 찍기</button>
+        <span id="photo-info" class="photo-hint"></span>
+      </div>
+      <canvas id="photo-canvas" class="photo-canvas"></canvas>
+      <div class="photo-panel">
+        <p id="photo-status" class="photo-status"></p>
+        <div class="photo-actions">
+          <button id="btn-save" class="btn-save" type="button" disabled>기록 저장</button>
+          <button id="btn-reset-fruit" class="btn-bar" type="button">과일 다시 지정</button>
+          <button id="btn-photo-mode" class="btn-bar" type="button">직접 지정</button>
+        </div>
       </div>
     </div>
   </section>
@@ -51,12 +73,14 @@
     <p id="records-empty" class="records-empty">아직 저장된 기록이 없습니다.</p>
     <table id="records-table" class="records-table" hidden>
       <thead>
-        <tr><th>번호</th><th>크기(mm)</th><th>측정 시각</th><th></th></tr>
+        <tr><th>번호</th><th>크기(mm)</th><th>거리(mm)</th><th>측정 시각</th><th></th></tr>
       </thead>
       <tbody id="records-body"></tbody>
     </table>
   </section>
 
+  <script src="measure.js"></script>
+  <script src="detect.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

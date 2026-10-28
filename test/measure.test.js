@@ -1,4 +1,4 @@
-// 계산식 단위 테스트. 실행: node v2/test/measure.test.js
+// 계산식 단위 테스트. 실행: node test/measure.test.js
 const assert = require("node:assert/strict");
 const m = require("../measure.js");
 
@@ -29,7 +29,7 @@ function tableHits(camera, cx, cz, d, dirX, dirZ) {
 }
 
 // ---------- 3단계: AR 크기 측정 ----------
-test("1차 보정식과 같은 결과 (높이 400mm, 측정 75mm)", () => {
+test("카드 기준 보정식과 같은 결과 (높이 400mm, 측정 75mm)", () => {
   const camera = [0, 0.4, 0];
   const r = m.measureFruitAr([-0.0375, 0, 0], [0.0375, 0, 0], camera);
   near(r.sizeMm, m.correctRoundFruit(75, 400), 1e-9, "크기");

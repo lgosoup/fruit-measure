@@ -35,7 +35,7 @@ function intrinsicsFromProjection(p, width, height) {
 
 // ---------- AR 크기 측정 ----------
 // 둥근 과일은 가장 넓은 부분이 바닥에서 (크기/2)만큼 떠 있어, 가장자리를 겨눈 시선은 실제보다 바깥쪽 바닥에 닿는다
-// 측정값 m = 실제값 x H / (H - 실제값/2)  →  실제값 = m x H / (H + m/2)   (1차와 같은 보정식, H: 카메라 높이)
+// 측정값 m = 실제값 x H / (H - 실제값/2)  →  실제값 = m x H / (H + m/2)   (카드 기준 때와 같은 보정식, H: 카메라 높이)
 function correctRoundFruit(measuredMm, heightMm) {
   return measuredMm * heightMm / (heightMm + measuredMm / 2);
 }

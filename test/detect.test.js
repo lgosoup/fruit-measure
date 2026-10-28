@@ -1,4 +1,4 @@
-// 윤곽 자동 인식 테스트: 실행 `node v2/test/detect.test.js`
+// 윤곽 자동 인식 테스트: 실행 `node test/detect.test.js`
 // 테이블 위 구를 카메라로 찍은 사진을 계산으로 그려, 인식한 윤곽에서 거리·크기가 다시 나오는지 확인한다
 const assert = require("node:assert");
 const { cameraDirToWorld, normalize, distanceFromCone, measureFruitCone, pixelToRay } = require("../measure.js");
