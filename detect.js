@@ -1,32 +1,41 @@
 // 과일 윤곽 자동 인식(외부 라이브러리 없음). 브라우저와 Node 테스트에서 함께 쓴다
 // 1) 가리킨 지점에서 여러 방향으로 선을 뻗어, 과일 색과 달라지는 첫 지점(경계점)을 찾는다
-// 2) 경계점들을 구의 윤곽(원뿔)에 맞춘다. 끊긴 경계로 새어 나간 점, 그림자·반사광에서 멈춘 점은 원형에 맞지 않아 버려진다
+// 2) 경계점들을 과일 윤곽(원뿔)에 맞춘다. 끊긴 경계로 새어 나간 점, 그림자·반사광에서 멈춘 점은 윤곽에 맞지 않아 버려진다
+// 회전타원체 과일은 세로 방향을 늘려 구로 바꾼 공간(맞추는 공간)에서 원뿔에 맞춘다
 
 if (typeof module !== "undefined") {
   // Node 테스트에서는 계산 함수를 불러온다(브라우저에서는 measure.js가 먼저 실린다)
   // eslint-disable-next-line no-global-assign
-  ({ pixelToRay, normalize, fitCone, coneError, coneOutline } = require("./measure.js"));
+  ({
+    pixelToRay, normalize, fitCone, coneError, coneRays, raysToPixels, cameraDirToWorld, worldDirToCamera,
+    stretchDir, fitConeStretched, searchSpheroidRatio, viewTiltDeg,
+  } = require("./measure.js"));
 }
 
 const DETECT_RAYS = 120;
+const SAME_SPACE = { toFit: (u) => u, fromFit: (v) => v };
 
 // image: { width, height, data(RGBA) }, seed: 과일 안쪽 한 점(px), k: 사진의 초점거리·중심(px)
+// space: 사진 방향 ↔ 맞추는 공간 방향 바꾸기 { toFit, fromFit }. 없으면 사진 방향 그대로(구)
 // 반환: { cone, outline, edges, inliers } 또는 { error: "none" | "cut" | "small" }
-function detectFruit(image, seed, k) {
-  const edges = findEdgePoints(image, seed);
-  const valid = edges.filter(Boolean);
-  if (valid.length < DETECT_RAYS * 0.3) return { error: "none" };
+function detectFruit(image, seed, k, space = SAME_SPACE) {
+  const edges = findEdgePoints(image, seed).filter(Boolean);
+  return fitEdges(edges, image, seed, k, space);
+}
 
-  const rays = valid.map((p) => normalize(pixelToRay(p, k)));
+function fitEdges(edges, image, seed, k, space) {
+  if (edges.length < DETECT_RAYS * 0.3) return { error: "none" };
+
+  const rays = edges.map((p) => space.toFit(normalize(pixelToRay(p, k))));
   const fit = fitConeRobust(rays, k);
   if (!fit || fit.inliers.length < Math.max(12, DETECT_RAYS * 0.35)) return { error: "none" };
   const { cone } = fit;
 
   // 가리킨 지점이 찾은 윤곽 안에 있어야 한다
-  const seedRay = normalize(pixelToRay(seed, k));
+  const seedRay = space.toFit(normalize(pixelToRay(seed, k)));
   if (dot(seedRay, cone.d) < cone.cosA) return { error: "none" };
 
-  const outline = coneOutline(cone, k, 72);
+  const outline = raysToPixels(coneRays(cone, 72).map(space.fromFit), k);
   const margin = 2;
   const outside = outline.filter((p) =>
     p.x < -margin || p.y < -margin || p.x > image.width + margin || p.y > image.height + margin).length;
@@ -34,7 +43,43 @@ function detectFruit(image, seed, k) {
   const radiusPx = k.fx * Math.tan(cone.alpha);
   if (radiusPx < 8) return { error: "small" };
 
-  return { cone, outline, edges: valid, inliers: fit.inliers.map((i) => valid[i]) };
+  return { cone, outline, edges, inliers: fit.inliers.map((i) => edges[i]) };
+}
+
+// 늘린 공간 바꾸기. cameraMatrix: 카메라 → 세계 행렬, s: 가로/세로 비율
+function stretchedSpace(cameraMatrix, s) {
+  return {
+    toFit: (u) => stretchDir(normalize(cameraDirToWorld(cameraMatrix, u)), s),
+    fromFit: (v) => worldDirToCamera(cameraMatrix, stretchDir(v, 1 / s)),
+  };
+}
+
+// AR: 비스듬히 본 과일의 윤곽에서 가로/세로 비율 s까지 함께 찾는다
+// 1) 구로 보고 넉넉하게 맞춰, 크게 튄 경계점(끊김으로 새어 나간 점 등)을 버린다
+// 2) 남은 점으로 비율 s를 찾는다  3) 그 비율로 늘린 공간에서 다시 인식해 맞는 점을 고른 뒤, 비율을 한 번 더 다듬는다
+// 반환: { cone(늘린 세계 공간), s, tiltDeg, outline, edges, inliers } 또는 { error }
+function detectFruitSpheroid(image, seed, k, cameraMatrix) {
+  const edges = findEdgePoints(image, seed).filter(Boolean);
+  const first = fitEdges(edges, image, seed, k, stretchedSpace(cameraMatrix, 1));
+  if (!first.cone) return first;
+  const toWorld = (p) => normalize(cameraDirToWorld(cameraMatrix, normalize(pixelToRay(p, k))));
+  const tiltDeg = viewTiltDeg(first.cone.d);
+
+  const roughRays = edges.map(toWorld).filter((u) => coneError(first.cone, u) < first.cone.alpha * 0.15);
+  let s = bestRatio(roughRays);
+  let found = fitEdges(edges, image, seed, k, stretchedSpace(cameraMatrix, s));
+  if (!found.cone) return found;
+  s = bestRatio(found.inliers.map(toWorld));
+  found = fitEdges(edges, image, seed, k, stretchedSpace(cameraMatrix, s));
+  if (!found.cone) return found;
+  return { ...found, s, tiltDeg };
+}
+
+function bestRatio(raysWorld) {
+  return searchSpheroidRatio((s) => {
+    const fit = fitConeStretched(raysWorld, s);
+    return fit ? fit.error : Infinity;
+  });
 }
 
 // ---------- 경계점 찾기 ----------
@@ -201,5 +246,5 @@ function dot(a, b) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { detectFruit, findEdgePoints, colorDistance, otsu };
+  module.exports = { detectFruit, detectFruitSpheroid, findEdgePoints, colorDistance, otsu };
 }

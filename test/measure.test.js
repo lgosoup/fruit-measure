@@ -128,6 +128,113 @@ test("같은 위치 두 점, 크기 없음은 계산하지 않음", () => {
   assert.equal(m.distanceFromPhoto({ x: 0, y: 10 }, { x: 100, y: 10 }, K, 0), null);
 });
 
+// ---------- 14단계: 회전타원체(가로·세로) ----------
+// 테이블(y=0) 위 회전타원체(가로 반지름 a, 세로 반지름 c)를 카메라에서 본 윤곽 시선을 직접 찾는다.
+// 시선이 과일에 닿는지를 이차방정식으로 판정하고, 닿음/안 닿음이 바뀌는 각도를 이분법으로 찾는다(계산식과 독립)
+function hitsSpheroid(camera, center, a, c, u) {
+  const k = a / c;
+  const p = [camera[0] - center[0], (camera[1] - center[1]) * k, camera[2] - center[2]];
+  const v = [u[0], u[1] * k, u[2]];
+  const pv = p[0] * v[0] + p[1] * v[1] + p[2] * v[2];
+  const vv = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+  const pp = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+  return pv * pv - vv * (pp - a * a) >= 0 && pv < 0;
+}
+
+function spheroidSilhouette(camera, center, a, c, angles) {
+  const w = m.normalize([center[0] - camera[0], center[1] - camera[1], center[2] - camera[2]]);
+  // e1: 수평 방향(가로), e2: 그에 수직(세로 쪽)
+  const e1 = m.normalize([w[2], 0, -w[0]]);
+  const e2 = [w[1] * e1[2] - w[2] * e1[1], w[2] * e1[0] - w[0] * e1[2], w[0] * e1[1] - w[1] * e1[0]];
+  return angles.map((t) => {
+    const side = [0, 1, 2].map((i) => Math.cos(t) * e1[i] + Math.sin(t) * e2[i]);
+    const dir = (phi) => [0, 1, 2].map((i) => Math.cos(phi) * w[i] + Math.sin(phi) * side[i]);
+    let lo = 0, hi = Math.PI / 2;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (hitsSpheroid(camera, center, a, c, dir(mid))) lo = mid;
+      else hi = mid;
+    }
+    return dir((lo + hi) / 2);
+  });
+}
+
+// 카메라에서 과일 중심을 향한 선이 표면과 만나는 점까지의 실제 거리(mm)
+function trueSpheroidDistanceMm(camera, center, a, c) {
+  const v = [center[0] - camera[0], center[1] - camera[1], center[2] - camera[2]];
+  const d = Math.hypot(...v);
+  const w = v.map((x) => x / d);
+  return (d - 1 / Math.sqrt((w[0] ** 2 + w[2] ** 2) / a ** 2 + w[1] ** 2 / c ** 2)) * 1000;
+}
+
+// 과일에서 tiltDeg만큼 기운 방향으로 dist(m) 떨어진 카메라
+function cameraAt(center, tiltDeg, dist, azimuthDeg = 30) {
+  const t = (tiltDeg * Math.PI) / 180, az = (azimuthDeg * Math.PI) / 180;
+  return [center[0] + dist * Math.sin(t) * Math.sin(az), center[1] + dist * Math.cos(t), center[2] + dist * Math.sin(t) * Math.cos(az)];
+}
+
+const ALL_ANGLES = Array.from({ length: 48 }, (_, i) => (i / 48) * Math.PI * 2);
+
+test("늘리기와 되돌리기: 원래 점으로 돌아옴", () => {
+  const p = [0.1, 0.07, -0.2];
+  const back = m.stretchPoint(m.stretchPoint(p, 1.25, 0.02), 1 / 1.25, 0.02);
+  p.forEach((v, i) => near(back[i], v, 1e-12, `좌표 ${i}`));
+});
+
+test("가로=세로(구)이면 기존 구 계산과 같은 결과", () => {
+  const center = [0.02, 0.035, -0.01];
+  const camera = cameraAt(center, 45, 0.4);
+  const rays = spheroidSilhouette(camera, center, 0.035, 0.035, ALL_ANGLES);
+  const sphere = m.fitCone(rays);
+  const old = m.measureFruitCone(sphere.d, sphere.sinA, camera, 0);
+  const now = m.measureSpheroidCone(m.fitConeStretched(rays, 1).cone, 1, camera, 0);
+  near(now.widthMm, old.sizeMm, 1e-6, "가로");
+  near(now.verticalMm, old.sizeMm, 1e-6, "세로");
+  near(now.distanceMm, old.distanceMm, 1e-6, "거리");
+});
+
+test("납작한 과일(가로 80, 세로 64mm)을 45도로 봄: 비율을 찾아 가로·세로·거리 0.5% 이내", () => {
+  const a = 0.04, c = 0.032;
+  const center = [0.03, c, -0.02];
+  const camera = cameraAt(center, 45, 0.42);
+  const r = m.measureSpheroidRays(spheroidSilhouette(camera, center, a, c, ALL_ANGLES), camera, 0);
+  near(r.widthMm, 80, 0.4, "가로");
+  near(r.verticalMm, 64, 0.32, "세로");
+  const truth = trueSpheroidDistanceMm(camera, center, a, c);
+  near(r.distanceMm, truth, truth * 0.005, "거리");
+  near(r.tiltDeg, 45, 0.5, "기운 각도");
+});
+
+test("세로가 긴 과일(가로 70, 세로 84mm)을 60도로 봄: 가로·세로 0.5% 이내", () => {
+  const a = 0.035, c = 0.042;
+  const center = [-0.01, c, 0.02];
+  const camera = cameraAt(center, 60, 0.38, -40);
+  const r = m.measureSpheroidRays(spheroidSilhouette(camera, center, a, c, ALL_ANGLES), camera, 0);
+  near(r.widthMm, 70, 0.35, "가로");
+  near(r.verticalMm, 84, 0.42, "세로");
+});
+
+test("점 4개(가로 양 끝, 세로 위·아래 끝)만으로도 가로·세로 1% 이내", () => {
+  const a = 0.04, c = 0.033;
+  const center = [0, c, 0];
+  const camera = cameraAt(center, 50, 0.4);
+  const four = spheroidSilhouette(camera, center, a, c, [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]);
+  const r = m.measureSpheroidRays(four, camera, 0);
+  near(r.widthMm, 80, 0.8, "가로");
+  near(r.verticalMm, 66, 0.66, "세로");
+});
+
+test("거의 바로 위에서 보면 기운 각도가 작게 나옴(세로를 믿을 수 없음을 알 수 있음)", () => {
+  const center = [0, 0.032, 0];
+  const camera = cameraAt(center, 8, 0.4);
+  const r = m.measureSpheroidRays(spheroidSilhouette(camera, center, 0.04, 0.032, ALL_ANGLES), camera, 0);
+  assert.ok(r.tiltDeg < 10, `기운 각도 ${r.tiltDeg}`);
+});
+
+test("시선이 4개보다 적으면 계산하지 않음", () => {
+  assert.equal(m.measureSpheroidRays([[0, -1, 0], [0.1, -1, 0], [0, -1, 0.1]], [0, 0.4, 0], 0), null);
+});
+
 if (failed) {
   console.log(`\n${failed}개 실패`);
   process.exit(1);

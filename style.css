@@ -367,8 +367,9 @@ body {
 .ar-done-size {
   margin: 4px 0 !important;
   color: #e879f9;
-  font-size: 1.4rem;
+  font-size: 1.25rem;
   font-weight: 700;
+  white-space: pre-line; /* 가로·세로를 두 줄로 */
 }
 
 .ar-done-sub {
