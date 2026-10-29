@@ -31,7 +31,7 @@ for (const [n, body] of details) {
   if (!/^- 이유: \S/m.test(body)) problems.push(`changes.md C-${n}: 이유가 비어 있음`);
 }
 
-// todo.md·PRD.md의 표시: (구분 · 요약 / [changes.md C-n](changes.md#c-n), ...)
+// todo.md·PRD.md의 표시: **(구분 · 요약 / [changes.md C-n](changes.md#c-n), ...)** (굵게)
 const markRe = /\(([^()]*?) · ([^()/]*?) \/ ((?:\[changes\.md C-\d+\]\(changes\.md#c-\d+\)(?:, )?)+)\)/g;
 const used = new Set();
 for (const file of ["todo.md", "PRD.md"]) {
@@ -52,6 +52,7 @@ for (const file of ["todo.md", "PRD.md"]) {
         if (!details.has(n)) problems.push(`${where}: C-${n}이 changes.md에 없음`);
       }
       if (kinds.includes("취소") && !/~~.+~~/.test(line)) problems.push(`${where}: 취소한 할 일은 취소선(~~)으로 남겨야 함`);
+      if (!line.includes(`**${m[0]}**`)) problems.push(`${where}: 표시를 굵게(**…**) 하지 않음`);
     }
   });
 }
