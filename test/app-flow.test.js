@@ -341,6 +341,22 @@ test("폰 확인 버그: 사진 가운데에 꼭지가 있어도 꼭지가 아�
   assert.ok(d && Math.abs(d - 100) / 100 < 0.03, `사진 거리 ${d}mm (실제 100mm)`);
 });
 
+test("폰 확인 버그: 위에서 내려다보며 다가가도 꼭지가 아니라 과일 크기를 재고, 자동 촬영 거리도 맞음", async () => {
+  const app = loadApp();
+  startFakeAr(app);
+  app.el("screen-photo").hidden = true;
+  const top = (from, to, n) => approachFrames(R, 0, from, to, n, { noise: 8, stem: 0.95 });
+  top(0.42, 0.22, 14).forEach((scene) => feed(app, scene, 3));
+  const size = app.run("arResult && arResult.sizeMm");
+  assert.ok(size && Math.abs(size - 70) / 70 < 0.03, `크기 ${size}mm (실제 70mm)`);
+  for (let cm = 18; cm >= 10; cm--) feed(app, top((cm / 100) + R, (cm / 100) + R, 2)[0], 3);
+  feed(app, top(0.1 + R, 0.1 + R, 2)[0], 40); // 멈춤 → 자동 촬영
+  await tick();
+  assert.ok(photoOpen(app), "자동 촬영되지 않음");
+  const d = app.run("photoResult && photoResult.distanceMm");
+  assert.ok(d && Math.abs(d - 100) / 100 < 0.03, `사진 거리 ${d}mm (실제 100mm)`);
+});
+
 test("12cm 밖에서는 멈춰 있어도 찍지 않음", async () => {
   const app = measuredApp();
   app.el("screen-photo").hidden = true;

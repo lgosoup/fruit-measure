@@ -314,6 +314,38 @@ test("꼭지: 따라가던 원(크기 ±10%)을 주면 꼭지가 아닌 과일 �
   }
 });
 
+test("꼭지: 위에서 내려다보며 처음 찾을 때도 꼭지가 아니라 과일을 잡음(30·42cm, 큰·작은 꼭지)", () => {
+  for (const [d, stem] of [[0.3, 0.95], [0.42, 0.95], [0.3, 0.985], [0.42, 0.985]]) {
+    const opt = approachFrames(R, 0, d, d, 2, { noise: 8, stem })[0];
+    const image = render(opt);
+    assert.ok(detectFruit(image, seedFor(opt), opt.k).cone === undefined ||
+      distanceFromCone(detectFruit(image, seedFor(opt), opt.k).cone, 70).distanceMm > (d - R) * 2000,
+      `${d * 100}cm: 가운데에서 꼭지를 잡지 않아 재현이 안 됨`);
+    const found = acquireFruit(image, opt.k);
+    assert.ok(found.cone, `${d * 100}cm 꼭지 ${stem}: 인식 실패 ${found.error}`);
+    const dist = distanceFromCone(found.cone, 70).distanceMm;
+    assert.ok(relErr(dist, (d - R) * 1000) < 0.02, `${d * 100}cm 꼭지 ${stem}: 거리 ${dist.toFixed(0)}mm`);
+  }
+});
+
+test("꼭지: 따라가던 과일의 가운데가 꼭지여도 놓치지 않고 과일을 따라감", () => {
+  const { opt, image, truth, cone } = topStemPhoto();
+  const prev = { cone, center: seedFor(opt) };
+  const found = trackFruit(image, opt.k, prev);
+  assert.ok(found.cone, `놓침 ${found.error}`);
+  assert.ok(relErr(distanceFromCone(found.cone, 70).distanceMm, truth) < 0.02);
+});
+
+test("밝은 접시 위 과일: 접시를 과일로 고르지 않음", () => {
+  for (const d of [0.3, 0.42]) {
+    const opt = approachFrames(R, 0, d, d, 2, { noise: 8, plate: R * 2.2 })[0];
+    const found = acquireFruit(render(opt), opt.k);
+    assert.ok(found.cone, `${d * 100}cm: 인식 실패 ${found.error}`);
+    const dist = distanceFromCone(found.cone, 70).distanceMm;
+    assert.ok(relErr(dist, (d - R) * 1000) < 0.03, `${d * 100}cm: 거리 ${dist.toFixed(0)}mm(접시를 잡으면 짧게 나옴)`);
+  }
+});
+
 test("꼭지: 사진에 과일이 없으면 다른 것을 잡지 않고 실패", () => {
   const { opt, cone } = topStemPhoto();
   const empty = render({ ...opt, center: [5, R, 5] });

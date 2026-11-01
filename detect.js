@@ -92,10 +92,13 @@ function acquireFruit(image, k) {
   const cx = image.width / 2;
   const cy = image.height / 2;
   const step = Math.min(image.width, image.height) * 0.15;
+  // 가운데, 가까운 둘레(멀리서 작게 보이는 과일의 가운데가 꼭지일 때), 먼 둘레 순서로 찾는다
   const seeds = [{ x: cx, y: cy }];
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    seeds.push({ x: cx + Math.cos(a) * step, y: cy + Math.sin(a) * step });
+  for (const ring of [0.4, 1]) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      seeds.push({ x: cx + Math.cos(a) * step * ring, y: cy + Math.sin(a) * step * ring });
+    }
   }
   let best = null;
   let lastError = "none";
@@ -110,28 +113,43 @@ function acquireFruit(image, k) {
     if (!best || dist < best.dist) best = { ...found, center, dist };
     if (dist < coneRadiusPx(found.cone, k)) break; // 가운데가 과일 안에 있으면 더 찾지 않는다
   }
-  return best || { error: lastError };
+  if (!best) return { error: lastError };
+  return enclosingFruit(image, k, best) || best;
 }
 
-// 직전에 찾은 과일 중심에서 다시 인식한다. 크기나 위치가 갑자기 크게 바뀌면 다른 물체로 보고 놓친 것으로 한다
-// prev: 직전 결과(cone, center). 반환: detectFruit 결과(+ center) 또는 { error: "lost" | ... }
-function trackFruit(image, k, prev) {
-  const found = detectFruit(image, prev.center, k);
-  if (!found.cone) return found;
-  const center = coneCenterPx(found.cone, k);
-  const prevRadius = coneRadiusPx(prev.cone, k);
-  const ratio = coneRadiusPx(found.cone, k) / prevRadius;
-  const jump = Math.hypot(center.x - prev.center.x, center.y - prev.center.y);
-  if (ratio < 0.6 || ratio > 1.7 || jump > prevRadius * 1.5) return { error: "lost" };
-  return { ...found, center };
+// 위에서 내려다보면 화면 가운데가 꼭지라, 꼭지 테두리를 과일로 잡을 수 있다.
+// 찾은 윤곽 바로 바깥 둘레에서 한 번 더 찾아, 그것을 감싸는 더 큰 윤곽이 있고 안쪽이 바깥보다 뚜렷하게 어두우면
+// (꼭지는 과일보다 어둡다) 바깥을 과일로 고른다. 접시처럼 과일보다 밝은 것이 감싸면 고르지 않는다. 없으면 null
+const ENCLOSE_MIN_RATIO = 1.5;    // 바깥 윤곽이 안쪽보다 이만큼 이상 커야 한다
+const ENCLOSE_DARKER = 0.8;       // 안쪽 밝기가 바깥의 이 비율보다 어두워야 꼭지로 본다
+function enclosingFruit(image, k, inner) {
+  const r = coneRadiusPx(inner.cone, k);
+  const c = inner.center;
+  const patch = Math.max(2, Math.round(r * 0.3));
+  const brightness = (p) => seedColor(image, p, patch).reduce((sum, v) => sum + v, 0);
+  const innerBright = brightness(c);
+  let best = null;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const seed = { x: c.x + Math.cos(a) * r * 1.4, y: c.y + Math.sin(a) * r * 1.4 };
+    if (seed.x < 0 || seed.y < 0 || seed.x >= image.width || seed.y >= image.height) continue;
+    const found = detectFruit(image, seed, k);
+    if (!found.cone) continue;
+    const center = coneCenterPx(found.cone, k);
+    const outerR = coneRadiusPx(found.cone, k);
+    const encloses = outerR >= r * ENCLOSE_MIN_RATIO && Math.hypot(center.x - c.x, center.y - c.y) + r <= outerR;
+    if (!encloses || innerBright >= brightness(seed) * ENCLOSE_DARKER) continue;
+    if (!best || outerR < best.outerR) best = { ...found, center, outerR };
+  }
+  if (!best) return null;
+  const { outerR, ...fruit } = best;
+  return fruit;
 }
 
-// 촬영한 사진에서 AR로 따라가던 과일(hintCone: 촬영 순간의 원뿔)과 위치·크기가 맞는 윤곽을 찾는다.
-// 사진 정가운데가 꼭지처럼 과일과 색이 다른 곳이면 그 테두리를 과일로 잡으므로, 따라가던 원 안쪽 여러 곳에서
-// 찾아 보고 따라가던 원과 크기가 가장 비슷한 것을 고른다. 맞는 것이 없으면 { error }
-const PHOTO_RATIO_MIN = 0.75;
-const PHOTO_RATIO_MAX = 1.33;
-function findInPhoto(image, k, hintCone) {
+// hintCone과 위치·크기가 맞는 윤곽을 찾는다. 원의 가운데와 그 안쪽 둘레 8곳에서 찾아 보고(가운데가 꼭지여도 껍질에서 찾도록),
+// 크기 비율이 [ratioMin, ratioMax] 안이고 중심이 반지름의 jumpRatio배 넘게 벗어나지 않은 것 중 크기가 가장 비슷한 것을 고른다.
+// firstOk가 true면 가운데에서 맞는 것을 찾는 즉시 돌려준다(따라가기: 매 프레임 빠르게)
+function findMatching(image, k, hintCone, ratioMin, ratioMax, jumpRatio, firstOk) {
   const c = coneCenterPx(hintCone, k);
   const r = coneRadiusPx(hintCone, k);
   const seeds = [c];
@@ -149,11 +167,27 @@ function findInPhoto(image, k, hintCone) {
     }
     const center = coneCenterPx(found.cone, k);
     const ratio = coneRadiusPx(found.cone, k) / r;
-    if (ratio < PHOTO_RATIO_MIN || ratio > PHOTO_RATIO_MAX || Math.hypot(center.x - c.x, center.y - c.y) > r * 0.5) continue;
+    if (ratio < ratioMin || ratio > ratioMax || Math.hypot(center.x - c.x, center.y - c.y) > r * jumpRatio) continue;
     const score = Math.abs(Math.log(ratio));
     if (!best || score < best.score) best = { ...found, center, score };
+    if (firstOk) break;
   }
-  return best || { error: cut ? "cut" : "lost" };
+  if (!best) return { error: cut ? "cut" : "lost" };
+  const { score, ...fruit } = best;
+  return fruit;
+}
+
+// 직전에 찾은 과일에서 다시 인식한다. 크기나 위치가 갑자기 크게 바뀌면 다른 물체로 보고 놓친 것으로 한다
+// prev: 직전 결과(cone, center). 반환: detectFruit 결과(+ center) 또는 { error: "lost" | "cut" | ... }
+function trackFruit(image, k, prev) {
+  return findMatching(image, k, prev.cone, 0.6, 1.7, 1.5, true);
+}
+
+// 촬영한 사진에서 AR로 따라가던 과일(hintCone: 촬영 순간의 원뿔)과 위치·크기가 맞는 윤곽을 찾는다.
+// 사진 정가운데가 꼭지처럼 과일과 색이 다른 곳이면 그 테두리를 과일로 잡으므로, 따라가던 원 안쪽 여러 곳에서
+// 찾아 보고 따라가던 원과 크기가 가장 비슷한 것을 고른다. 맞는 것이 없으면 { error }
+function findInPhoto(image, k, hintCone) {
+  return findMatching(image, k, hintCone, 0.75, 1.33, 0.5, false);
 }
 
 function bestRatio(raysWorld) {

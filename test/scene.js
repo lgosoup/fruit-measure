@@ -75,6 +75,8 @@ function render(opt) {
     if (u[1] >= 0) return [200, 200, 200];
     const t = -cam[1] / u[1];
     const p = [cam[0] + u[0] * t, 0, cam[2] + u[2] * t];
+    // 과일 밑에 깐 밝은 접시(반지름 m): 과일을 감싸는 더 큰 윤곽
+    if (opt.plate && Math.hypot(p[0] - center[0], p[2] - center[2]) < opt.plate) return [235, 235, 228];
     if (opt.blob) {
       // 과일 옆에 붙은 과일색 물체: 이쪽 윤곽이 끊긴다
       const bx = center[0] + r * 1.15, bz = center[2];
