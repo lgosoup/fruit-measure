@@ -16,7 +16,12 @@ metadata:
    for i in $(seq 1 15); do n=$(curl -s "https://lgosoup.github.io/fruit-measure/app.js?x=$RANDOM" | grep -c 새함수이름); [ "$n" -gt 0 ] && break; sleep 10; done
    ```
 2. **배포 파일과 커밋 비교**: `index.html`, `app.js`, `measure.js`, `detect.js`, `style.css`를 받아 `git show HEAD:파일`과 같은지 본다(줄바꿈 `\r`은 지우고 비교). 다르면 배포가 아직이거나 캐시다.
-3. **크롬으로 열기**: 브라우저 도구로 새 탭에 `https://lgosoup.github.io/fruit-measure/?r=단계번호`를 연다. 쿼리를 바꿔 예전 파일이 섞이지 않게 한다. 처음 화면이 「AR 미지원」이고 콘솔 오류가 없는지 본다.
+3. **크롬으로 열기**: 브라우저 도구로 새 탭에 `https://lgosoup.github.io/fruit-measure/?r=단계번호`를 연다. 처음 화면이 「AR 미지원」이고 콘솔 오류가 없는지 본다.
+   - 주소 뒤 쿼리는 페이지에만 붙어 **스크립트 캐시는 피하지 못한다.** 이번에 넣은 함수가 페이지에 있는지(`typeof 새함수이름`) 먼저 보고, 없으면 아래를 실행한 뒤 다시 확인한다(그냥 새로고침으로는 안 바뀐다).
+     ```js
+     await Promise.all(["measure.js", "detect.js", "app.js", "style.css", "index.html"].map((f) => fetch(f, { cache: "reload" })));
+     location.reload();
+     ```
 4. **가짜 AR 넣기**: `scripts/fake-ar.js` 내용을 페이지에서 그대로 실행한 뒤, `window.fakeAr`로 장면을 넣는다.
    ```js
    await fakeAr.start();
@@ -48,5 +53,6 @@ fakeAr.state();                    // → { distance: "표면까지 9.9 cm", gui
 - **브라우저 도구가 연결되지 않음**: 1~2번(배포 반영, 파일 비교)만 하고, 화면 확인은 못 했다고 보고한다. [AI 검토] 항목은 체크하지 않는다. 사용자에게 확장 연결을 부탁한다.
 - **둘레가 옆으로 늘어난 타원으로 보임**: 가짜 카메라 비율이 화면과 다를 때 생긴다. `fake-ar.js`는 화면 비율에 맞춰 만든다. 직접 프레임을 만들었다면 비율을 맞춘다.
 - **장면을 한 번에 크게 바꾸면 놓침으로 나옴**: 앱은 크기·위치가 갑자기 바뀌면 다른 물체로 본다. 거리는 1cm씩 단계적으로 바꾼다(`surface`를 반복 호출).
+- **자동 촬영 뒤 사진 화면에서 `createImageBitmap` 오류**: 가짜 카메라 이미지가 브라우저 `ImageData`가 아니면 생긴다. `fake-ar.js`는 `ImageData`로 감싸 돌려준다.
 - **안내 문구가 바뀌지 않음**: 「놓쳤습니다」 같은 잠깐 안내는 3초 동안 다른 안내를 덮는다. 이어서 확인하려면 `arNote = null`로 지운 뒤 다시 본다.
 - **사용자 폰에서 예전 화면이 보임**: GitHub Pages는 파일을 10분 캐시한다. 배포 파일이 커밋과 같으면 폰에서 새로고침하거나 잠시 뒤 다시 열어 달라고 안내한다.

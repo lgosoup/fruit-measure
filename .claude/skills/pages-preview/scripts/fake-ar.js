@@ -50,7 +50,11 @@
         gl: { bindFramebuffer() {}, clearColor() {}, clear() {}, FRAMEBUFFER: 0, COLOR_BUFFER_BIT: 0 },
         refSpace: {},
       };
-      readCameraImage = (camera) => scene.render(camera.opt);
+      // 앱은 카메라 이미지를 브라우저 ImageData로 받는다(사진 화면의 createImageBitmap이 이 형식만 받음)
+      readCameraImage = (camera) => {
+        const img = scene.render(camera.opt);
+        return new ImageData(img.data, img.width, img.height);
+      };
       homeScreen.hidden = true;
       arRoot.hidden = false;
       showArUi();
