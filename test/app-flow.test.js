@@ -21,7 +21,12 @@ function loadApp() {
       const ctx2d = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => ((t[k] = v), true) });
       elements[id] = {
         id, hidden: false, disabled: false, textContent: "", style: {}, width: 0, height: 0, listeners: {},
-        classList: { toggle() {}, add() {}, remove() {} },
+        classes: new Set(),
+        classList: {
+          toggle(c, on) { const set = elements[id].classes; (on === undefined ? !set.has(c) : on) ? set.add(c) : set.delete(c); },
+          add(c) { elements[id].classes.add(c); }, remove(c) { elements[id].classes.delete(c); },
+          contains(c) { return elements[id].classes.has(c); },
+        },
         addEventListener(type, fn) { this.listeners[type] = fn; },
         click() { this.listeners.click && this.listeners.click(); },
         getContext: () => ctx2d, appendChild() {}, querySelector: () => el(`${id}-q`),
@@ -201,6 +206,75 @@ test("충분히 따라가던 과일을 놓치면 「놓쳤습니다」", () => {
   const empty = { ...frames[6], center: [5, R, 5] };
   feed(app, empty, 15);
   assert.match(app.el("ar-guide").textContent, /놓쳤습니다/);
+});
+
+// ---------- 16단계: 12cm 안내 ----------
+// 크기를 잴 때까지 다가간 뒤, 표면까지 surfaceM(m) 떨어진 장면
+function measuredApp() {
+  const app = loadApp();
+  startFakeAr(app);
+  approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 }).forEach((scene) => feed(app, scene, 3));
+  assert.ok(app.run("arResult !== null"), "크기가 정해지지 않음");
+  return app;
+}
+const sceneAt = (surfaceM) => approachFrames(R, 40, surfaceM + R, surfaceM + R, 2, { noise: 8 })[0];
+// 표면까지 from → to(m)로 1cm씩 다가가며 장면마다 3프레임
+function approach(app, from, to, emulated = false) {
+  const n = Math.max(2, Math.round(Math.abs(from - to) * 100) + 1);
+  for (let i = 0; i < n; i++) feed(app, sceneAt(from + ((to - from) * i) / (n - 1)), 3, emulated);
+}
+
+test("크기를 잰 뒤 25cm에서는 거리가 보이고 「더 가까이」 안내", () => {
+  const app = measuredApp();
+  feed(app, sceneAt(0.25), 6);
+  const d = app.run("liveDistance.distanceMm");
+  assert.ok(Math.abs(d - 250) / 250 < 0.03, `거리 ${d.toFixed(1)}mm`);
+  assert.match(app.el("ar-guide").textContent, /더 가까이/);
+  assert.strictEqual(app.el("ar-distance").hidden, false);
+  assert.match(app.el("ar-distance").textContent, /표면까지 2\d\.\d cm/);
+  assert.strictEqual(app.el("ar-distance").classList.contains("ar-distance-inside"), false);
+});
+
+test("12cm 안(10cm)에 들어오면 완료 안내와 초록 표시", () => {
+  const app = measuredApp();
+  approach(app, 0.2, 0.1);
+  const d = app.run("liveDistance.distanceMm");
+  assert.ok(Math.abs(d - 100) / 100 < 0.03, `거리 ${d.toFixed(1)}mm`);
+  assert.match(app.el("ar-guide").textContent, /12cm 안에 들어왔습니다/);
+  assert.strictEqual(app.el("ar-distance").classList.contains("ar-distance-inside"), true);
+});
+
+test("너무 가까워 과일이 화면에 다 안 들어오면 「조금 멀리」, 잰 크기와 과일은 그대로", () => {
+  const app = measuredApp();
+  approach(app, 0.2, 0.02);
+  assert.match(app.el("ar-guide").textContent, /조금 멀리/);
+  assert.ok(app.run("arResult !== null && target !== null"));
+  assert.strictEqual(app.el("ar-distance").hidden, true);
+  approach(app, 0.03, 0.1); // 다시 떨어지면 거리가 돌아옴
+  assert.match(app.el("ar-guide").textContent, /12cm 안/);
+});
+
+test("크기를 잰 뒤 AR이 폰 위치를 놓쳐도 거리는 계속 나옴", () => {
+  const app = measuredApp();
+  approach(app, 0.2, 0.11, true);
+  const d = app.run("liveDistance.distanceMm");
+  assert.ok(Math.abs(d - 110) / 110 < 0.03, `거리 ${d.toFixed(1)}mm`);
+  assert.match(app.el("ar-guide").textContent, /12cm 안/);
+});
+
+test("크기를 잰 뒤 과일을 놓쳐도 잰 크기는 남고 과일만 다시 찾음", () => {
+  const app = measuredApp();
+  const size = app.run("arResult.sizeMm");
+  feed(app, sceneAt(0.2), 3);
+  feed(app, { ...sceneAt(0.2), center: [5, R, 5] }, 15);
+  assert.ok(app.run("target === null"));
+  assert.strictEqual(app.run("arResult && arResult.sizeMm"), size);
+  app.run("arNote = null"); // 「놓쳤습니다」 안내가 지나간 뒤
+  feed(app, { ...sceneAt(0.2), center: [5, R, 5] }, 1);
+  assert.match(app.el("ar-guide").textContent, /다시 찾는 중/);
+  feed(app, sceneAt(0.18), 6);
+  assert.ok(app.run("target !== null"), "과일을 다시 찾아야 함");
+  assert.match(app.el("ar-guide").textContent, /더 가까이/);
 });
 
 test("회귀: 크기를 잰 뒤 가까이서 촬영하면 사진에서 거리가 나오고, 저장하면 기록이 남고 다음 과일 찾기로 돌아감", async () => {

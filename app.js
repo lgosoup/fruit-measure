@@ -22,6 +22,7 @@ const LOST_LIMIT = 4;             // 이만큼 연달아 놓치면 처음부터 
 const SIZE_STABLE_COUNT = 5;      // 크기를 정하려면 이만큼 연달아 계산한 값이
 const SIZE_STABLE_RATIO = 0.02;   // 이 비율(최대-최소 / 평균) 안쪽으로 모여야 한다
 const btnReselect = document.getElementById("btn-reselect");
+const arDistance = document.getElementById("ar-distance");
 const arDone = document.getElementById("ar-done");
 
 // ---------- AR 지원 확인 ----------
@@ -64,6 +65,9 @@ let arResult = null;
 let frameCount = 0;
 let arReady = false;      // AR이 한 번이라도 폰 위치를 잡았는가. 그 전에는 놓쳤다는 안내 대신 찾는 중이라고 한다
 let trackedCount = 0;     // 지금 과일을 연달아 따라간 횟수. 충분히 따라간 과일을 놓쳤을 때만 놓쳤다고 알린다
+// 크기가 정해진 뒤 따라가는 과일의 화면 속 크기로 구한 거리 { distanceMm, cut }. wasInside: 직전에 12cm 안이었는가
+let liveDistance = null;
+let wasInside = false;
 const TRACK_ESTABLISHED = 5;
 let arNote = null;        // 잠깐 보여줄 안내 { text, until }. 매 프레임 안내에 덮이지 않게 한다
 
@@ -182,6 +186,7 @@ function onXrFrame(time, frame) {
   btnCapture.hidden = !measured;
   btnCapture.disabled = !measured;
   btnReselect.disabled = !target;
+  showDistance();
 
   setArGuide(time, arGuideText(pose.emulatedPosition));
 
@@ -195,7 +200,12 @@ function onXrFrame(time, frame) {
 const SEARCHING = "과일을 찾는 중입니다. 30cm쯤 떨어져 과일을 화면 가운데에 두세요";
 
 function arGuideText(emulated) {
-  if (arResult) return "크기를 쟀습니다. 과일 쪽으로 다가가 과일이 화면에 다 들어오게 촬영하세요";
+  if (arResult) {
+    // 거리는 카메라 이미지와 정해진 크기로만 구하므로 AR이 폰 위치를 놓쳐도 이어진다
+    if (!target) return "과일을 다시 찾는 중입니다. 과일을 화면 가운데에 두세요(잰 크기는 그대로)";
+    const guide = distanceGuide(liveDistance && liveDistance.distanceMm, liveDistance && liveDistance.cut);
+    return guide.inside ? `${guide.text}. 촬영하세요` : guide.text;
+  }
   if (!target) {
     if (searchError === "cut") return "과일이 화면에 다 들어오게 조금 떨어져 주세요";
     return SEARCHING;
@@ -203,6 +213,22 @@ function arGuideText(emulated) {
   if (emulated) return arReady ? "AR이 폰 위치를 놓쳤습니다. 조금 떨어져 천천히 움직여 주세요" : SEARCHING;
   const moved = views.length > 1 ? Math.round(maxBaselineCm(views)) : 0;
   return `과일을 찾았습니다. 과일 쪽으로 천천히 다가오세요 (${views.length}곳 측정 · ${moved}cm 이동)`;
+}
+
+// 과일이 화면의 짧은 변 절반 넘게 차지하는가(사진 속 지름 기준)
+function fillsScreen(fruit, image) {
+  const radiusPx = fruit.k.fx * Math.tan(fruit.cone.alpha);
+  return 2 * radiusPx > 0.5 * Math.min(image.width, image.height);
+}
+
+// 크기를 잰 뒤 화면 아래쪽에 표면까지 거리를 크게 보여 준다. 12cm 안이면 초록색
+function showDistance() {
+  const show = arResult !== null && target !== null && liveDistance !== null && !liveDistance.cut;
+  arDistance.hidden = !show;
+  if (!show) return;
+  const text = `표면까지 ${(liveDistance.distanceMm / 10).toFixed(1)} cm`;
+  if (arDistance.textContent !== text) arDistance.textContent = text;
+  arDistance.classList.toggle("ar-distance-inside", distanceGuide(liveDistance.distanceMm).inside);
 }
 
 function maxBaselineCm(list) {
@@ -224,16 +250,25 @@ function setArGuide(time, text) {
 // ---------- AR 크기 측정: 과일을 찾아 따라가며 여러 위치에서 본 윤곽으로 크기를 정한다 ----------
 // 과일을 처음부터 다시 찾는다(다시 선택하기, 저장 후 다음 과일, AR 종료)
 function resetTarget() {
+  loseTarget();
+  searchError = "none";
+  resetArMeasure();
+}
+
+// 따라가던 과일만 놓는다(잰 크기는 그대로)
+function loseTarget() {
   target = null;
   lostCount = 0;
   trackedCount = 0;
-  searchError = "none";
-  resetArMeasure();
+  liveDistance = null;
+  wasInside = false;
 }
 
 // 따라가는 과일은 그대로 두고 크기만 다시 잰다
 function resetArMeasure() {
   arNote = null;
+  liveDistance = null;
+  wasInside = false;
   views = [];
   sizeHistory = [];
   arResult = null;
@@ -256,11 +291,19 @@ function updateTarget(view, layer, emulated) {
   const k = intrinsicsFromProjection(view.projectionMatrix, image.width, image.height);
   const found = target ? trackFruit(image, k, target) : acquireFruit(image, k);
   if (!found.cone) {
+    // 크기를 잰 뒤 너무 가까워 과일이 화면에 다 들어오지 않으면, 놓친 것이 아니라 조금 멀리 가라고 안내한다.
+    // 화면을 꽉 채우면 윤곽 자체를 못 찾으므로, 직전에 과일이 화면을 크게 차지하고 있었어도 너무 가까운 것으로 본다
+    if (arResult && (found.error === "cut" || (target && fillsScreen(target, image)))) {
+      liveDistance = { cut: true };
+      wasInside = false;
+      return;
+    }
     if (!target) searchError = found.error;
     else if (++lostCount >= LOST_LIMIT) {
       // 잠깐 잡았다 놓친 것이면 조용히 다시 찾고, 충분히 따라가던 과일을 놓쳤을 때만 알린다
       const established = trackedCount >= TRACK_ESTABLISHED;
-      resetTarget();
+      if (arResult) loseTarget(); // 잰 크기는 남기고 과일만 다시 찾는다
+      else resetTarget();
       if (established) showArNote("과일을 놓쳤습니다. 과일을 화면 가운데에 두세요");
     }
     return;
@@ -272,8 +315,16 @@ function updateTarget(view, layer, emulated) {
   const matrix = Array.from(view.transform.matrix);
   target = { ...found, k, matrix, position };
 
-  // 크기가 정해졌거나, AR이 폰 위치를 모르면(추정 위치) 모으지 않는다
-  if (arResult || emulated) return;
+  // 크기가 정해진 뒤에는 화면 속 크기로 거리를 구한다. 12cm 안에 들어오는 순간 진동으로도 알린다
+  if (arResult) {
+    liveDistance = { distanceMm: distanceFromCone(found.cone, arResult.sizeMm).distanceMm, cut: false };
+    const inside = distanceGuide(liveDistance.distanceMm).inside;
+    if (inside && !wasInside && navigator.vibrate) navigator.vibrate(80);
+    wasInside = inside;
+    return;
+  }
+  // AR이 폰 위치를 모르면(추정 위치) 크기 계산에 모으지 않는다
+  if (emulated) return;
   views.push({ origin: position, d: normalize(cameraDirToWorld(matrix, found.cone.d)), sinA: found.cone.sinA });
   const fit = fitSphereViews(views);
   if (!fit) return;
@@ -303,17 +354,19 @@ function drawArOverlay(view) {
   if (!view) return;
   const toScreen = (q) => projectToScreen(q, view.transform.inverse.matrix, view.projectionMatrix, w, h);
 
-  if (arResult) {
-    const p = view.transform.position;
-    const outline = sphereOutline(arResult.center, arResult.radiusM, [p.x, p.y, p.z]).map(toScreen);
-    if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, FRUIT_COLOR);
-  } else if (target) {
-    // 찾은 윤곽(사진 좌표)을 그때의 카메라에서 1m 앞 세계 점으로 바꿔 지금 화면에 그린다
+  if (target) {
+    // 따라가는 과일의 윤곽(사진 좌표)을 그때의 카메라에서 1m 앞 세계 점으로 바꿔 지금 화면에 그린다.
+    // 크기를 재기 전에는 청록, 잰 뒤에는 자주
     const outline = target.outline.map((px) => {
       const dir = normalize(cameraDirToWorld(target.matrix, pixelToRay(px, target.k)));
       return toScreen([0, 1, 2].map((i) => target.position[i] + dir[i]));
     });
-    if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, RETICLE_COLOR);
+    if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, arResult ? FRUIT_COLOR : RETICLE_COLOR);
+  } else if (arResult) {
+    // 과일을 다시 찾는 동안에는 잰 크기의 구를 지금 카메라 위치에서 본 둘레로 그린다
+    const p = view.transform.position;
+    const outline = sphereOutline(arResult.center, arResult.radiusM, [p.x, p.y, p.z]).map(toScreen);
+    if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, FRUIT_COLOR);
   }
 }
 

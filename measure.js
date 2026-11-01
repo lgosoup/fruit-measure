@@ -392,6 +392,22 @@ function isSizeStable(history, count = 5, ratio = 0.02) {
   return (max - min) / mean < ratio;
 }
 
+// ---------- 측정 거리 안내 ----------
+// 근적외선은 신호가 희석되지 않는 가까운 거리에서 잰다. 정확히 한 값일 필요는 없고 한도(12cm) 안이면 된다
+const DISTANCE_LIMIT_MM = 120;
+
+// distanceMm: 카메라~과일 표면 거리(mm). 과일이 화면에 다 들어오지 않으면 cut = true
+// 반환: { inside: 한도 안인가, text: 안내 }
+function distanceGuide(distanceMm, cut = false, limitMm = DISTANCE_LIMIT_MM) {
+  if (cut) return { inside: false, text: "너무 가깝습니다. 과일이 화면에 다 들어오게 조금 멀리 떨어져 주세요" };
+  if (!(distanceMm > 0)) return { inside: false, text: "과일을 찾는 중입니다" };
+  if (distanceMm > limitMm) {
+    const cm = Math.max(1, Math.ceil((distanceMm - limitMm) / 10));
+    return { inside: false, text: `${cm}cm 더 가까이 다가가 주세요` };
+  }
+  return { inside: true, text: `${limitMm / 10}cm 안에 들어왔습니다` };
+}
+
 // 가우스 소거(부분 피벗). 풀 수 없으면 null
 function solveLinear(A, b) {
   const n = b.length;
@@ -412,7 +428,7 @@ function solveLinear(A, b) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    fitSphereViews, solveLinear, isSizeStable, MIN_BASELINE_M,
+    fitSphereViews, solveLinear, isSizeStable, MIN_BASELINE_M, distanceGuide, DISTANCE_LIMIT_MM,
     transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr,
     pixelToRay, distanceFromPhoto, fitCone, coneError, coneOutline, distanceFromCone, cameraDirToWorld,
     measureFruitCone, normalize, coneRays, raysToPixels, worldDirToCamera, stretchPoint, stretchDir, spheroidRadiusAlong, viewTiltDeg,

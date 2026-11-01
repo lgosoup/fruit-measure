@@ -293,6 +293,18 @@ test("크기 확정: 마지막 5번이 2% 안쪽으로 모여야 정함", () => 
   assert.equal(m.isSizeStable([70, 72, 69, 71.5, 70.2]), false, "4% 흔들림");
 });
 
+// ---------- 16단계: 12cm 안내 ----------
+test("거리 안내: 12cm 밖이면 몇 cm 더 가까이, 안이면 완료, 너무 가까우면 조금 멀리", () => {
+  assert.match(m.distanceGuide(250).text, /13cm 더 가까이/);
+  assert.match(m.distanceGuide(121).text, /1cm 더 가까이/);
+  assert.equal(m.distanceGuide(121).inside, false);
+  assert.equal(m.distanceGuide(120).inside, true, "딱 12cm는 안");
+  assert.equal(m.distanceGuide(60).inside, true, "가까운 쪽 한도는 없음");
+  assert.match(m.distanceGuide(40, true).text, /조금 멀리/);
+  assert.equal(m.distanceGuide(40, true).inside, false);
+  assert.equal(m.distanceGuide(NaN).inside, false);
+});
+
 if (failed) {
   console.log(`\n${failed}개 실패`);
   process.exit(1);
