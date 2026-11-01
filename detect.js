@@ -75,6 +75,57 @@ function detectFruitSpheroid(image, seed, k, cameraMatrix) {
   return { ...found, s, tiltDeg };
 }
 
+// ---------- 대상 찾기와 따라가기 ----------
+// 원뿔 축이 사진에 찍히는 위치(과일 중심, px)와 사진 속 반지름(px)
+function coneCenterPx(cone, k) {
+  return { x: k.cx + (k.fx * cone.d[0]) / cone.d[2], y: k.cy + (k.fy * cone.d[1]) / cone.d[2] };
+}
+
+function coneRadiusPx(cone, k) {
+  return k.fx * Math.tan(cone.alpha);
+}
+
+// 사용자는 잴 과일을 화면 가운데에 둔다. 가운데와 그 둘레 몇 곳에서 인식해 보고, 찾은 과일 중
+// 중심이 사진 가운데에 가장 가까운 것을 고른다(사용자에게 보이지 않는 기준점)
+// 반환: detectFruit 결과(+ center) 또는 { error }
+function acquireFruit(image, k) {
+  const cx = image.width / 2;
+  const cy = image.height / 2;
+  const step = Math.min(image.width, image.height) * 0.15;
+  const seeds = [{ x: cx, y: cy }];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    seeds.push({ x: cx + Math.cos(a) * step, y: cy + Math.sin(a) * step });
+  }
+  let best = null;
+  let lastError = "none";
+  for (const seed of seeds) {
+    const found = detectFruit(image, seed, k);
+    if (!found.cone) {
+      lastError = found.error === "cut" || lastError === "cut" ? "cut" : found.error;
+      continue;
+    }
+    const center = coneCenterPx(found.cone, k);
+    const dist = Math.hypot(center.x - cx, center.y - cy);
+    if (!best || dist < best.dist) best = { ...found, center, dist };
+    if (dist < coneRadiusPx(found.cone, k)) break; // 가운데가 과일 안에 있으면 더 찾지 않는다
+  }
+  return best || { error: lastError };
+}
+
+// 직전에 찾은 과일 중심에서 다시 인식한다. 크기나 위치가 갑자기 크게 바뀌면 다른 물체로 보고 놓친 것으로 한다
+// prev: 직전 결과(cone, center). 반환: detectFruit 결과(+ center) 또는 { error: "lost" | ... }
+function trackFruit(image, k, prev) {
+  const found = detectFruit(image, prev.center, k);
+  if (!found.cone) return found;
+  const center = coneCenterPx(found.cone, k);
+  const prevRadius = coneRadiusPx(prev.cone, k);
+  const ratio = coneRadiusPx(found.cone, k) / prevRadius;
+  const jump = Math.hypot(center.x - prev.center.x, center.y - prev.center.y);
+  if (ratio < 0.6 || ratio > 1.7 || jump > prevRadius * 1.5) return { error: "lost" };
+  return { ...found, center };
+}
+
 function bestRatio(raysWorld) {
   return searchSpheroidRatio((s) => {
     const fit = fitConeStretched(raysWorld, s);
@@ -246,5 +297,5 @@ function dot(a, b) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { detectFruit, detectFruitSpheroid, findEdgePoints, colorDistance, otsu };
+  module.exports = { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit, coneCenterPx, findEdgePoints, colorDistance, otsu };
 }

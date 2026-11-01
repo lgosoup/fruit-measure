@@ -16,10 +16,12 @@ const ctx = canvas.getContext("2d");
 
 const RETICLE_COLOR = "#22d3ee"; // 기준선 색
 const FRUIT_COLOR = "#e879f9";   // 과일선 색. 주황·초록 과일 위에서도 잘 보인다
-const MIN_AR_DISTANCE_MM = 300;  // AR은 30cm보다 가까우면 불안정하다
-const MIN_TILT_DEG = 30;         // 이보다 수직에 가깝게 내려다보면 세로가 윤곽에 거의 드러나지 않는다
-const btnPoint = document.getElementById("btn-point");
-const btnDetect = document.getElementById("btn-detect");
+const TRACK_EVERY = 3;            // 몇 프레임마다 과일을 찾을지(화면이 끊기지 않게)
+const TRACK_IMAGE_SHORT = 480;    // 과일을 찾을 때 쓰는 카메라 이미지의 짧은 변(px)
+const LOST_LIMIT = 4;             // 이만큼 연달아 놓치면 처음부터 다시 찾는다
+const SIZE_STABLE_COUNT = 5;      // 크기를 정하려면 이만큼 연달아 계산한 값이
+const SIZE_STABLE_RATIO = 0.02;   // 이 비율(최대-최소 / 평균) 안쪽으로 모여야 한다
+const btnReselect = document.getElementById("btn-reselect");
 const arDone = document.getElementById("ar-done");
 
 // ---------- AR 지원 확인 ----------
@@ -49,13 +51,17 @@ checkArSupport();
 // ---------- AR 세션 ----------
 // xr: 실행 중인 AR 세션과 WebGL 자원. AR이 아닐 때는 null
 let xr = null;
-let reticleHit = null;    // 조준점 방향으로 찾은 테이블 면 위 위치(세계 좌표 [x, y, z]). 못 찾으면 null
 let captureRequested = false;
-let pointRequested = false;
-let detectRequested = false;
-// arPoints: 과일 윤곽(가로 양 끝, 세로 위·아래 끝)을 겨눈 시선이 테이블 면에 닿은 위치(세계 좌표). arResult: 크기 측정 결과
-let arPoints = [];
+let reselectRequested = false;
+// target: 따라가고 있는 과일(cone, center, outline과 그때의 카메라 값 k·matrix·position). 못 찾았으면 null
+// views: 크기 계산에 모은 위치별 원뿔, sizeHistory: 모을 때마다 계산한 크기(mm), arResult: 정해진 크기
+let target = null;
+let lostCount = 0;
+let searchError = "none";
+let views = [];
+let sizeHistory = [];
 let arResult = null;
+let frameCount = 0;
 let arNote = null;        // 잠깐 보여줄 안내 { text, until }. 매 프레임 안내에 덮이지 않게 한다
 
 function showArNote(text) {
@@ -67,11 +73,8 @@ document.getElementById("btn-ar-close").addEventListener("click", () => xr && xr
 btnCapture.addEventListener("click", () => {
   captureRequested = true;
 });
-btnPoint.addEventListener("click", () => {
-  pointRequested = true;
-});
-btnDetect.addEventListener("click", () => {
-  detectRequested = true;
+btnReselect.addEventListener("click", () => {
+  reselectRequested = true;
 });
 document.getElementById("btn-remeasure").addEventListener("click", resetArMeasure);
 
@@ -84,16 +87,14 @@ async function startAr() {
   let session = null;
   try {
     session = await navigator.xr.requestSession("immersive-ar", {
-      requiredFeatures: ["hit-test", "dom-overlay", "camera-access"],
+      requiredFeatures: ["dom-overlay", "camera-access"],
       domOverlay: { root: arRoot },
     });
     const glCanvas = document.createElement("canvas");
     const gl = glCanvas.getContext("webgl2", { xrCompatible: true });
     session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
     const refSpace = await session.requestReferenceSpace("local");
-    const viewerSpace = await session.requestReferenceSpace("viewer");
-    const hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
-    xr = { session, gl, refSpace, hitTestSource, binding: new XRWebGLBinding(session, gl), blit: null };
+    xr = { session, gl, refSpace, binding: new XRWebGLBinding(session, gl), blit: null };
   } catch (error) {
     console.error(error);
     if (session) session.end().catch(() => {});
@@ -113,10 +114,10 @@ async function startAr() {
 
 function onArEnd() {
   xr = null;
-  reticleHit = null;
   captureRequested = false;
+  reselectRequested = false;
   arNote = null;
-  resetArMeasure();
+  resetTarget();
   arRoot.hidden = true;
   photoScreen.hidden = true;
   homeScreen.hidden = false;
@@ -141,7 +142,7 @@ window.addEventListener("resize", () => {
 
 function onXrFrame(time, frame) {
   if (!xr) return;
-  const { session, gl, refSpace, hitTestSource } = xr;
+  const { session, gl, refSpace } = xr;
   session.requestAnimationFrame(onXrFrame);
 
   // 3D는 그리지 않는다. 카메라 화면이 보이도록 투명하게 비운다
@@ -152,60 +153,32 @@ function onXrFrame(time, frame) {
 
   const pose = frame.getViewerPose(refSpace);
   if (!pose) {
-    reticleHit = null;
     // 위치를 잃으면 카메라 이미지도 받을 수 없다. 촬영 요청은 남겨두지 않는다
     if (captureRequested) {
       captureRequested = false;
       showArNote("위치를 잃어 촬영하지 못했습니다. 조금 떨어져 다시 촬영해 주세요");
     }
-    pointRequested = false;
-    detectRequested = false;
-    btnPoint.disabled = true;
-    btnDetect.disabled = true;
-    setArGuide(time, "위치를 잃었습니다. 폰을 천천히 움직여 테이블을 비추세요");
+    setArGuide(time, "위치를 잃었습니다. 폰을 천천히 움직여 주세요");
     drawArOverlay(null);
     return;
   }
   const view = pose.views[0];
 
-  const hits = frame.getHitTestResults(hitTestSource);
-  if (hits.length > 0) {
-    const p = hits[0].getPose(refSpace).transform.position;
-    reticleHit = [p.x, p.y, p.z];
-  } else {
-    reticleHit = null;
+  if (reselectRequested) {
+    reselectRequested = false;
+    resetTarget();
+    showArNote("과일을 화면 가운데에 가깝게 해 주세요");
   }
-  if (pointRequested) {
-    pointRequested = false;
-    if (reticleHit) {
-      const c = pose.transform.position;
-      addArPoint(reticleHit, [c.x, c.y, c.z]);
-    } else {
-      showArNote("테이블을 찾은 뒤 점을 찍어 주세요");
-    }
-  }
-  if (detectRequested) {
-    detectRequested = false;
-    if (reticleHit) detectArFruit(view, layer);
-    else showArNote("테이블을 찾은 뒤 과일 인식을 눌러 주세요");
-  }
-  // 크기를 재기 전에는 측정 버튼, 잰 뒤에는 촬영 버튼만 보인다
-  const measured = arResult !== null;
-  if (btnDetect.hidden !== measured) {
-    btnDetect.hidden = measured;
-    btnPoint.hidden = measured;
-    btnCapture.hidden = !measured;
-  }
-  btnPoint.disabled = !reticleHit;
-  btnDetect.disabled = !reticleHit;
-  btnCapture.disabled = !measured;
+  frameCount++;
+  if (frameCount % TRACK_EVERY === 0) updateTarget(view, layer, pose.emulatedPosition);
 
-  let guide;
-  if (arResult) guide = "원하는 위치로 다가가 과일이 화면에 다 들어오게 촬영하세요";
-  else if (!reticleHit) guide = "폰을 천천히 움직여 테이블을 비추세요";
-  else if (arPoints.length > 0) guide = `${POINT_STEPS[arPoints.length]}에 조준점을 맞추고 점 찍기 (${arPoints.length}/4)`;
-  else guide = "30cm 이상 떨어져 폰을 비스듬히 들고, 조준점을 과일에 맞추고 「과일 인식」 (윤곽 점 찍기도 가능)";
-  setArGuide(time, guide);
+  // 크기가 정해지면 촬영 버튼이 보인다. 다시 선택하기는 과일을 잡은 뒤에만 쓸 수 있다
+  const measured = arResult !== null;
+  btnCapture.hidden = !measured;
+  btnCapture.disabled = !measured;
+  btnReselect.disabled = !target;
+
+  setArGuide(time, arGuideText(pose.emulatedPosition));
 
   if (captureRequested) {
     captureRequested = false;
@@ -214,113 +187,101 @@ function onXrFrame(time, frame) {
   drawArOverlay(view);
 }
 
+function arGuideText(emulated) {
+  if (arResult) return "크기를 쟀습니다. 과일 쪽으로 다가가 과일이 화면에 다 들어오게 촬영하세요";
+  if (!target) {
+    if (searchError === "cut") return "과일이 화면에 다 들어오게 조금 떨어져 주세요";
+    return "30cm쯤 떨어져 과일을 화면 가운데에 두세요";
+  }
+  if (emulated) return "AR이 폰 위치를 놓쳤습니다. 조금 떨어져 천천히 움직여 주세요";
+  const moved = views.length > 1 ? Math.round(maxBaselineCm(views)) : 0;
+  return `과일을 찾았습니다. 과일 쪽으로 천천히 다가오세요 (${views.length}곳 측정 · ${moved}cm 이동)`;
+}
+
+function maxBaselineCm(list) {
+  let max = 0;
+  for (const a of list) {
+    for (const b of list) {
+      max = Math.max(max, Math.hypot(a.origin[0] - b.origin[0], a.origin[1] - b.origin[1], a.origin[2] - b.origin[2]));
+    }
+  }
+  return max * 100;
+}
+
 function setArGuide(time, text) {
   if (arNote && time < arNote.until) text = arNote.text;
   else arNote = null;
   if (arGuide.textContent !== text) arGuide.textContent = text;
 }
 
-// ---------- AR 크기 측정 ----------
+// ---------- AR 크기 측정: 과일을 찾아 따라가며 여러 위치에서 본 윤곽으로 크기를 정한다 ----------
+// 과일을 처음부터 다시 찾는다(다시 선택하기, 저장 후 다음 과일, AR 종료)
+function resetTarget() {
+  target = null;
+  lostCount = 0;
+  searchError = "none";
+  resetArMeasure();
+}
+
+// 따라가는 과일은 그대로 두고 크기만 다시 잰다
 function resetArMeasure() {
   arNote = null;
-  arPoints = [];
+  views = [];
+  sizeHistory = [];
   arResult = null;
   arDone.hidden = true;
   btnCapture.disabled = true;
 }
 
-// 조준점(화면 가운데)이 가리킨 과일의 윤곽을 카메라 이미지에서 찾아, 회전타원체의 원뿔과 카메라 높이로 가로·세로를 구한다
-function detectArFruit(view, layer) {
-  if (!view.camera) {
-    showArNote("카메라 이미지를 가져오지 못했습니다. 다시 눌러 주세요");
-    return;
-  }
+// 카메라 이미지에서 과일을 찾거나 따라가고, AR이 폰 위치를 알면 그 위치의 원뿔을 모아 크기를 계산한다
+function updateTarget(view, layer, emulated) {
+  if (!view.camera) return;
   let image;
   try {
-    image = readCameraImage(view.camera);
+    image = readCameraImage(view.camera, TRACK_IMAGE_SHORT);
   } catch (error) {
     console.error(error);
-    showArNote("카메라 이미지를 가져오지 못했습니다. 다시 눌러 주세요");
     return;
   } finally {
     xr.gl.bindFramebuffer(xr.gl.FRAMEBUFFER, layer.framebuffer);
   }
   const k = intrinsicsFromProjection(view.projectionMatrix, image.width, image.height);
-  const found = detectFruitSpheroid(image, { x: image.width / 2, y: image.height / 2 }, k, view.transform.matrix);
+  const found = target ? trackFruit(image, k, target) : acquireFruit(image, k);
   if (!found.cone) {
-    showArNote(DETECT_ERRORS[found.error] || DETECT_ERRORS.none);
+    if (!target) searchError = found.error;
+    else if (++lostCount >= LOST_LIMIT) {
+      resetTarget();
+      showArNote("과일을 놓쳤습니다. 과일을 화면 가운데에 두세요");
+    }
     return;
   }
-  if (found.tiltDeg < MIN_TILT_DEG) {
-    showArNote(TILT_NOTE);
-    return;
-  }
-  const c = view.transform.position;
-  const camera = [c.x, c.y, c.z];
-  const result = measureSpheroidCone(found.cone, found.s, camera, reticleHit[1]);
-  if (!checkArResult(result, "눌러")) return;
-  arPoints = [];
-  setArResult(result, `자동 인식 · 거리 ${(result.distanceMm / 10).toFixed(1)}cm`);
+  lostCount = 0;
+  const p = view.transform.position;
+  const position = [p.x, p.y, p.z];
+  const matrix = Array.from(view.transform.matrix);
+  target = { ...found, k, matrix, position };
+
+  // 크기가 정해졌거나, AR이 폰 위치를 모르면(추정 위치) 모으지 않는다
+  if (arResult || emulated) return;
+  views.push({ origin: position, d: normalize(cameraDirToWorld(matrix, found.cone.d)), sinA: found.cone.sinA });
+  const fit = fitSphereViews(views);
+  if (!fit) return;
+  sizeHistory.push(fit.sizeMm);
+  if (isSizeStable(sizeHistory, SIZE_STABLE_COUNT, SIZE_STABLE_RATIO)) setArResult(fit);
 }
 
-const TILT_NOTE = "너무 바로 위에서 보고 있어 세로를 잴 수 없습니다. 폰을 조금 더 눕혀(비스듬히) 다시 재 주세요";
-
-// 계산 결과가 쓸 만한지 확인하고, 아니면 안내한다. action: 안내 끝말("눌러", "찍어")
-function checkArResult(result, action) {
-  if (!result) {
-    showArNote(`과일 크기를 계산하지 못했습니다. 폰을 비스듬히 들고 다시 ${action} 주세요`);
-    return false;
-  }
-  if (result.distanceMm < MIN_AR_DISTANCE_MM) {
-    showArNote(`너무 가깝습니다(약 ${(result.distanceMm / 10).toFixed(0)}cm). 30cm 이상 떨어져 다시 ${action} 주세요`);
-    return false;
-  }
-  return true;
-}
-
-const DETECT_ERRORS = {
-  none: "과일을 찾지 못했습니다. 조준점을 과일 가운데에 맞추거나, 가장자리에 점 찍기로 재 주세요",
-  cut: "과일이 화면에 다 들어오지 않았습니다. 조금 떨어져 다시 눌러 주세요",
-  small: "과일이 너무 작게 보입니다. 조금 다가가(30cm 이상) 다시 눌러 주세요",
-};
-
-function setArResult(result, sub) {
-  arResult = result;
-  arNote = null; // 앞선 실패 안내는 지운다
-  document.getElementById("ar-done-size").textContent =
-    `가로 ${result.widthMm.toFixed(1)} mm
-세로 ${result.verticalMm.toFixed(1)} mm`;
-  document.getElementById("ar-done-sub").textContent = sub;
+function setArResult(fit) {
+  arResult = fit;
+  arNote = null; // 앞선 안내는 지운다
+  document.getElementById("ar-done-size").textContent = `${fit.sizeMm.toFixed(1)} mm`;
+  document.getElementById("ar-done-sub").textContent =
+    `과일을 공으로 보고 잰 지름 · ${views.length}곳에서 측정, ${Math.round(fit.baselineM * 100)}cm 이동`;
   arDone.hidden = false;
 }
 
-// 점 찍기 순서: 가로 양 끝, 세로 위·아래 끝
-const POINT_STEPS = ["가로 한쪽 끝", "가로 반대쪽 끝", "세로 위쪽 끝", "세로 아래쪽 끝"];
-
-// 찍은 점마다 「카메라 → 테이블 면 위 점」 시선은 과일 윤곽에 접한다. 네 시선으로 가로·세로를 구한다
-// 시선은 마지막 점을 찍을 때의 카메라 위치에서 그린다(점을 찍는 동안 폰을 크게 움직이지 않는다고 본다)
-function addArPoint(hit, cameraPosition) {
-  if (arPoints.length === 4) arPoints = [];
-  arPoints.push(hit);
-  if (arPoints.length < 4) return;
-
-  const tableY = arPoints.reduce((sum, p) => sum + p[1], 0) / 4;
-  const rays = arPoints.map((p) =>
-    normalize([p[0] - cameraPosition[0], p[1] - cameraPosition[1], p[2] - cameraPosition[2]]));
-  const result = measureSpheroidRays(rays, cameraPosition, tableY);
-  if (result && result.tiltDeg < MIN_TILT_DEG) {
-    arPoints = [];
-    showArNote(TILT_NOTE);
-    return;
-  }
-  if (!checkArResult(result, "찍어")) {
-    arPoints = [];
-    return;
-  }
-  setArResult(result, `점 찍기 · 거리 ${(result.distanceMm / 10).toFixed(1)}cm`);
-}
-
-// ---------- AR 화면 위 표시(조준점, 과일 점) ----------
+// ---------- AR 화면 위 표시(과일 둘레) ----------
+// 크기가 정해지기 전에는 찾은 윤곽을, 정해진 뒤에는 그 크기의 구를 지금 카메라 위치에서 본 둘레를 그린다.
+// 화면 가운데 기준점은 보이지 않는다(사용자는 과일을 화면 가운데에 둘 뿐이다)
 function drawArOverlay(view) {
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth;
@@ -328,44 +289,21 @@ function drawArOverlay(view) {
   arCtx.setTransform(1, 0, 0, 1, 0, 0);
   arCtx.clearRect(0, 0, arCanvas.width, arCanvas.height);
   arCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!view) return;
+  const toScreen = (q) => projectToScreen(q, view.transform.inverse.matrix, view.projectionMatrix, w, h);
 
-  // 잰 과일의 둘레: 지금 카메라 위치에서 본 회전타원체의 윤곽을 그려, 과일과 겹치는지 바로 볼 수 있게 한다
-  // 세로를 늘린 공간에서 구의 윤곽을 구한 뒤 원래 공간으로 되돌린다
-  if (view && arResult) {
+  if (arResult) {
     const p = view.transform.position;
-    const { s, a } = arResult;
-    const tableY = arResult.center[1] - arResult.c;
-    const camera = stretchPoint([p.x, p.y, p.z], s, tableY);
-    const outline = sphereOutline(stretchPoint(arResult.center, s, tableY), a, camera)
-      .map((q) => stretchPoint(q, 1 / s, tableY))
-      .map((q) => projectToScreen(q, view.transform.inverse.matrix, view.projectionMatrix, w, h));
+    const outline = sphereOutline(arResult.center, arResult.radiusM, [p.x, p.y, p.z]).map(toScreen);
     if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, FRUIT_COLOR);
+  } else if (target) {
+    // 찾은 윤곽(사진 좌표)을 그때의 카메라에서 1m 앞 세계 점으로 바꿔 지금 화면에 그린다
+    const outline = target.outline.map((px) => {
+      const dir = normalize(cameraDirToWorld(target.matrix, pixelToRay(px, target.k)));
+      return toScreen([0, 1, 2].map((i) => target.position[i] + dir[i]));
+    });
+    if (outline.length > 0 && outline.every(Boolean)) drawOutline(arCtx, outline, RETICLE_COLOR);
   }
-
-  // 찍은 과일 점
-  if (view && arPoints.length > 0 && !arResult) {
-    const screen = arPoints
-      .map((p) => projectToScreen(p, view.transform.inverse.matrix, view.projectionMatrix, w, h))
-      .filter(Boolean);
-    drawPoints(arCtx, screen, FRUIT_COLOR);
-  }
-
-  // 조준점: 면을 찾으면 청록, 못 찾으면 회색
-  const cx = w / 2;
-  const cy = h / 2;
-  arCtx.strokeStyle = reticleHit ? RETICLE_COLOR : "#9ca3af";
-  arCtx.lineWidth = 2;
-  arCtx.beginPath();
-  arCtx.arc(cx, cy, 14, 0, Math.PI * 2);
-  arCtx.moveTo(cx - 24, cy);
-  arCtx.lineTo(cx - 6, cy);
-  arCtx.moveTo(cx + 6, cy);
-  arCtx.lineTo(cx + 24, cy);
-  arCtx.moveTo(cx, cy - 24);
-  arCtx.lineTo(cx, cy - 6);
-  arCtx.moveTo(cx, cy + 6);
-  arCtx.lineTo(cx, cy + 24);
-  arCtx.stroke();
 }
 
 // 카메라에서 본 구의 윤곽(세계 좌표 점들). 카메라가 구 안에 있으면 빈 배열
@@ -440,11 +378,12 @@ function capture(view, layer) {
   showPhoto(image, intrinsics);
 }
 
-// 카메라 텍스처를 화면 크기 그대로 복사해 읽는다(셰이더로 그린 뒤 readPixels)
-function readCameraImage(camera) {
+// 카메라 텍스처를 복사해 읽는다(셰이더로 그린 뒤 readPixels). maxShort를 주면 짧은 변이 그 크기가 되도록 줄여 읽는다
+function readCameraImage(camera, maxShort) {
   const gl = xr.gl;
-  const width = camera.width;
-  const height = camera.height;
+  const scale = maxShort ? Math.min(1, maxShort / Math.min(camera.width, camera.height)) : 1;
+  const width = Math.round(camera.width * scale);
+  const height = Math.round(camera.height * scale);
   const texture = xr.binding.getCameraImage(camera);
   if (!xr.blit) xr.blit = createBlit(gl);
   const { program, buffer } = xr.blit;
@@ -830,8 +769,8 @@ function saveRecord() {
     photoStatus.textContent = "브라우저에 저장하지 못했습니다. 저장 공간 설정을 확인해 주세요.";
     return;
   }
-  // 다음 과일을 바로 잴 수 있도록 AR 화면으로 돌아가 크기부터 다시 잰다
-  resetArMeasure();
+  // 다음 과일을 바로 잴 수 있도록 AR 화면으로 돌아가 과일 찾기부터 다시 한다
+  resetTarget();
   showArUi();
   showArNote(`${record.no}번 기록 저장됨 · 크기 ${record.sizeMm.toFixed(1)}mm · 거리 ${record.distanceMm.toFixed(1)}mm. 다음 과일을 재세요`);
 }

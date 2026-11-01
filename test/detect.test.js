@@ -2,9 +2,10 @@
 // 테이블 위 구를 카메라로 찍은 사진을 계산으로 그려, 인식한 윤곽에서 거리·크기가 다시 나오는지 확인한다
 const assert = require("node:assert");
 const {
-  cameraDirToWorld, normalize, distanceFromCone, measureFruitCone, pixelToRay, measureSpheroidCone,
+  cameraDirToWorld, normalize, distanceFromCone, measureFruitCone, pixelToRay, measureSpheroidCone, fitSphereViews,
 } = require("../measure.js");
-const { detectFruit, detectFruitSpheroid } = require("../detect.js");
+const { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit } = require("../detect.js");
+const { cameraPose, render, seedFor, approachFrames } = require("./scene.js");
 
 let failed = 0;
 function test(name, fn) {
@@ -15,100 +16,6 @@ function test(name, fn) {
     failed++;
     console.log("FAIL", name, "\n     ", error.message);
   }
-}
-
-// 아래를 pitchDeg만큼 내려다보는 카메라(카메라 → 세계 행렬, 열 우선)
-function cameraPose(position, pitchDeg) {
-  const t = (pitchDeg * Math.PI) / 180;
-  const up = [0, Math.cos(t), -Math.sin(t)];
-  const back = [0, Math.sin(t), Math.cos(t)]; // 카메라 +z(앞의 반대)
-  return [1, 0, 0, 0, up[0], up[1], up[2], 0, back[0], back[1], back[2], 0, position[0], position[1], position[2], 1];
-}
-
-// 장면: 테이블(y=0) 위 반지름 r 구. 옵션으로 그림자, 반사광, 경계에 붙은 과일색 물체(윤곽 끊김), 꼭지, 잡음
-function render(opt) {
-  const { width, height, k, pose, center, r } = opt;
-  const cam = [pose[12], pose[13], pose[14]];
-  const table = opt.table || [120, 118, 112];
-  const fruit = opt.fruit || [235, 140, 25];
-  const light = normalize([0.4, 1, 0.3]);
-  let noiseSeed = 7;
-  const noise = () => {
-    noiseSeed = (noiseSeed * 1103515245 + 12345) % 2147483648;
-    return (noiseSeed / 2147483648 - 0.5) * 2 * (opt.noise || 0);
-  };
-  const data = new Uint8ClampedArray(width * height * 4);
-  const SS = 2; // 경계가 매끄럽도록 한 픽셀을 2x2로 나눠 그린다
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const sum = [0, 0, 0];
-      for (let sy = 0; sy < SS; sy++) {
-        for (let sx = 0; sx < SS; sx++) {
-          const p = { x: x + (sx + 0.5) / SS, y: y + (sy + 0.5) / SS };
-          const c = shade(normalize(cameraDirToWorld(pose, pixelToRay(p, k))));
-          for (let i = 0; i < 3; i++) sum[i] += c[i];
-        }
-      }
-      const o = (y * width + x) * 4;
-      for (let i = 0; i < 3; i++) data[o + i] = sum[i] / (SS * SS) + noise();
-      data[o + 3] = 255;
-    }
-  }
-  return { width, height, data };
-
-  function shade(u) {
-    // 과일(가로 반지름 r, 세로 반지름 rc인 회전타원체)과 만나는지: 세로를 r/rc배 늘려 구로 바꿔 푼다
-    const rc = opt.rc || r;
-    const q = r / rc;
-    const oc = [cam[0] - center[0], (cam[1] - center[1]) * q, cam[2] - center[2]];
-    const v = [u[0], u[1] * q, u[2]];
-    const vv = v[0] ** 2 + v[1] ** 2 + v[2] ** 2;
-    const b = oc[0] * v[0] + oc[1] * v[1] + oc[2] * v[2];
-    const disc = b * b - vv * (oc[0] ** 2 + oc[1] ** 2 + oc[2] ** 2 - r * r);
-    if (disc >= 0) {
-      const t = (-b - Math.sqrt(disc)) / vv;
-      const hit = [cam[0] + u[0] * t, cam[1] + u[1] * t, cam[2] + u[2] * t];
-      const n = normalize([(hit[0] - center[0]) / r ** 2, (hit[1] - center[1]) / rc ** 2, (hit[2] - center[2]) / r ** 2]);
-      if (opt.stem && n[1] > 0.985) return [90, 70, 30];
-      const lambert = Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
-      const view = -(n[0] * u[0] + n[1] * u[1] + n[2] * u[2]);
-      if (opt.highlight && lambert > 0.97 && view > 0.5) return [255, 245, 225];
-      const f = 0.45 + 0.55 * lambert;
-      return fruit.map((v) => v * f);
-    }
-    // 테이블
-    if (u[1] >= 0) return [200, 200, 200];
-    const t = -cam[1] / u[1];
-    const p = [cam[0] + u[0] * t, 0, cam[2] + u[2] * t];
-    if (opt.blob) {
-      // 과일 옆에 붙은 과일색 물체: 이쪽 윤곽이 끊긴다
-      const bx = center[0] + r * 1.15, bz = center[2];
-      if (Math.hypot(p[0] - bx, p[2] - bz) < r * 0.45) return fruit.map((v) => v * 0.9);
-    }
-    if (opt.shadow) {
-      const sx = center[0] - r * 0.5, sz = center[2] - r * 0.4;
-      if (Math.hypot(p[0] - sx, p[2] - sz) < r * 1.25) return table.map((v) => v * 0.45);
-    }
-    return table;
-  }
-}
-
-// 구 중심이 사진에 찍히는 위치를 가리킨 지점으로 쓴다
-function seedFor(opt) {
-  const cam = [opt.pose[12], opt.pose[13], opt.pose[14]];
-  const m = opt.pose;
-  const w = [opt.center[0] - cam[0], opt.center[1] - cam[1], opt.center[2] - cam[2]];
-  // 세계 → 카메라: 회전의 전치
-  const c = [
-    m[0] * w[0] + m[1] * w[1] + m[2] * w[2],
-    m[4] * w[0] + m[5] * w[1] + m[6] * w[2],
-    m[8] * w[0] + m[9] * w[1] + m[10] * w[2],
-  ];
-  const img = [c[0], -c[1], -c[2]];
-  return {
-    x: opt.k.cx + opt.k.fx * img[0] / img[2] + (opt.seedShift || [0, 0])[0],
-    y: opt.k.cy + opt.k.fy * img[1] / img[2] + (opt.seedShift || [0, 0])[1],
-  };
 }
 
 function trueDistanceMm(opt) {
@@ -276,6 +183,102 @@ test("AR 거의 바로 위에서 보면 기운 각도가 작게 나옴(세로를
   const result = detectFruitSpheroid(render(opt), seedFor(opt), opt.k, opt.pose);
   assert.ok(result.cone, "인식 실패: " + result.error);
   assert.ok(result.tiltDeg < 10, `기운 각도 ${result.tiltDeg}`);
+});
+
+// ---------- 14단계: 다가가며 찍힌 사진 여러 장으로 크기 정하기 ----------
+function sizeFromFrames(frames) {
+  const views = [];
+  for (const opt of frames) {
+    const found = detectFruit(render(opt), seedFor(opt), opt.k);
+    if (!found.cone) continue;
+    views.push({ origin: [opt.pose[12], opt.pose[13], opt.pose[14]], d: normalize(cameraDirToWorld(opt.pose, found.cone.d)), sinA: found.cone.sinA });
+  }
+  return { fit: fitSphereViews(views), used: views.length };
+}
+
+test("다가가며 찍은 8장(40 → 20cm, 45도, 잡음): 지름 2% 이내", () => {
+  const { fit } = sizeFromFrames(approachFrames(R, 45, 0.4, 0.2, 8, { noise: 8 }));
+  assert.ok(fit, "크기를 정하지 못함");
+  assert.ok(relErr(fit.sizeMm, 2 * R * 1000) < 0.02, `지름 ${fit.sizeMm.toFixed(1)}mm, 실제 ${(2 * R * 1000).toFixed(1)}mm`);
+});
+
+test("다가가며 찍은 8장 + 그림자 + 반사광 + 꼭지(30도): 지름 3% 이내", () => {
+  const { fit } = sizeFromFrames(approachFrames(R, 30, 0.38, 0.2, 8, { noise: 10, shadow: true, highlight: true, stem: true }));
+  assert.ok(fit, "크기를 정하지 못함");
+  assert.ok(relErr(fit.sizeMm, 2 * R * 1000) < 0.03, `지름 ${fit.sizeMm.toFixed(1)}mm, 실제 ${(2 * R * 1000).toFixed(1)}mm`);
+});
+
+test("거의 바로 위에서 다가가도(5도) 지름 2% 이내", () => {
+  const { fit } = sizeFromFrames(approachFrames(R, 5, 0.4, 0.22, 8, { noise: 8 }));
+  assert.ok(fit, "크기를 정하지 못함");
+  assert.ok(relErr(fit.sizeMm, 2 * R * 1000) < 0.02, `지름 ${fit.sizeMm.toFixed(1)}mm, 실제 ${(2 * R * 1000).toFixed(1)}mm`);
+});
+
+// ---------- 14단계: 대상 찾기와 따라가기 ----------
+// 과일 중심이 사진에 찍히는 위치(정답)
+function truthCenterPx(opt) {
+  return seedFor({ ...opt, seedShift: [0, 0] });
+}
+
+test("과일이 화면 가운데에서 조금 비켜 있어도(가운데 점이 과일 밖) 찾음", () => {
+  const opt = arScene(50, { noise: 8 });
+  // 사진 가운데가 과일 밖에 오도록 과일을 옆으로 옮긴 장면
+  opt.center = [opt.center[0] + 0.06, opt.center[1], opt.center[2]];
+  const moved = truthCenterPx(opt);
+  assert.ok(Math.hypot(moved.x - opt.width / 2, moved.y - opt.height / 2) > 40, "과일 중심이 가운데에서 충분히 비켜야 함");
+  const found = acquireFruit(render(opt), opt.k);
+  assert.ok(found.cone, "못 찾음: " + found.error);
+  assert.ok(Math.hypot(found.center.x - moved.x, found.center.y - moved.y) < 4, `찾은 중심 ${found.center.x.toFixed(0)},${found.center.y.toFixed(0)}`);
+});
+
+test("과일이 두 개면 화면 가운데에 가까운 과일을 고름", () => {
+  const opt = arScene(50, { noise: 8 });
+  // 가운데 근처의 측정 과일 + 화면 왼쪽에 같은 색의 다른 과일
+  opt.other = { center: [opt.center[0] - 0.12, R, opt.center[2] + 0.02], r: R, color: [230, 120, 30] };
+  const found = acquireFruit(render(opt), opt.k);
+  assert.ok(found.cone, "못 찾음: " + found.error);
+  const t = truthCenterPx(opt);
+  assert.ok(Math.hypot(found.center.x - t.x, found.center.y - t.y) < 4, "가운데에 가까운 과일이 아님");
+});
+
+test("과일이 없으면(테이블만) 못 찾음으로 끝남", () => {
+  const opt = arScene(50, { noise: 8 });
+  opt.center = [5, R, 5]; // 화면 밖 멀리
+  const found = acquireFruit(render(opt), opt.k);
+  assert.strictEqual(found.cone, undefined);
+});
+
+test("다가가는 8장 동안 따라가기: 매 장 과일 중심을 놓치지 않음", () => {
+  const frames = approachFrames(R, 40, 0.4, 0.2, 8, { noise: 8, shadow: true });
+  let prev = acquireFruit(render(frames[0]), frames[0].k);
+  assert.ok(prev.cone, "처음에 못 찾음");
+  for (const opt of frames.slice(1)) {
+    const found = trackFruit(render(opt), opt.k, prev);
+    assert.ok(found.cone, "놓침: " + found.error);
+    const t = truthCenterPx(opt);
+    assert.ok(Math.hypot(found.center.x - t.x, found.center.y - t.y) < 5, "엉뚱한 곳을 따라감");
+    prev = found;
+  }
+});
+
+test("과일이 화면에서 옆으로 움직여도 따라감(폰을 옆으로 돌림)", () => {
+  const base = arScene(50, { noise: 8 });
+  let prev = acquireFruit(render(base), base.k);
+  assert.ok(prev.cone, "처음에 못 찾음");
+  for (let i = 1; i <= 6; i++) {
+    const opt = { ...base, center: [base.center[0] + i * 0.008, base.center[1], base.center[2]] }; // 한 장에 약 1cm씩
+    const found = trackFruit(render(opt), opt.k, prev);
+    assert.ok(found.cone, `${i}번째에서 놓침: ${found.error}`);
+    prev = found;
+  }
+});
+
+test("따라가던 과일이 갑자기 사라지면 놓침으로 끝남", () => {
+  const opt = arScene(50, { noise: 8 });
+  const prev = acquireFruit(render(opt), opt.k);
+  const gone = { ...opt, center: [5, R, 5] };
+  const found = trackFruit(render(gone), gone.k, prev);
+  assert.strictEqual(found.cone, undefined);
 });
 
 console.log(failed ? `\n${failed}개 실패` : "\n모두 통과");

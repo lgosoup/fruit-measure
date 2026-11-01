@@ -235,6 +235,64 @@ test("시선이 4개보다 적으면 계산하지 않음", () => {
   assert.equal(m.measureSpheroidRays([[0, -1, 0], [0.1, -1, 0], [0, -1, 0.1]], [0, 0.4, 0], 0), null);
 });
 
+// ---------- 14단계: 다가가며 여러 위치에서 크기 정하기 ----------
+// 카메라가 path의 위치들을 지나며 과일을 본다. 위치마다 윤곽 시선(정답과 독립적으로 이분법으로 찾음)을 원뿔로 맞춰 넣는다
+function viewsAlong(path, center, a, c) {
+  return path.map((origin) => {
+    const cone = m.fitCone(spheroidSilhouette(origin, center, a, c, ALL_ANGLES));
+    return { origin, d: cone.d, sinA: cone.sinA };
+  });
+}
+
+// 과일 중심에서 tiltDeg만큼 기운 방향으로 from → to(m)까지 n걸음 곧장 다가가는 경로. side(m)만큼 옆으로 흔들 수 있다
+function approachPath(center, tiltDeg, from, to, n, side = 0) {
+  return Array.from({ length: n }, (_, i) => {
+    const dist = from + ((to - from) * i) / (n - 1);
+    const p = cameraAt(center, tiltDeg, dist);
+    return [p[0] + side * Math.sin(i * 1.3), p[1], p[2] + side * Math.cos(i * 0.7)];
+  });
+}
+
+test("곧장 다가감(40 → 20cm, 기울기 45도): 지름 70mm와 중심 0.5% 이내", () => {
+  const center = [0.02, 0.035, -0.01];
+  const r = m.fitSphereViews(viewsAlong(approachPath(center, 45, 0.4, 0.2, 8), center, 0.035, 0.035));
+  near(r.sizeMm, 70, 0.35, "지름");
+  near(Math.hypot(r.center[0] - center[0], r.center[1] - center[1], r.center[2] - center[2]) * 1000, 0, 0.5, "중심 어긋남(mm)");
+});
+
+test("옆으로 흔들며 다가감(바로 위에 가까운 10도): 지름 0.5% 이내", () => {
+  const center = [0, 0.04, 0];
+  const r = m.fitSphereViews(viewsAlong(approachPath(center, 10, 0.38, 0.18, 10, 0.03), center, 0.04, 0.04));
+  near(r.sizeMm, 80, 0.4, "지름");
+});
+
+// 구로 보므로 납작한 과일은 비스듬히 볼수록 세로가 섞여 조금 작게 나온다(납작 15%면 10~60도에서 80 → 75mm).
+// 크기는 보정 값이라 이 정도는 받아들이고, 세로와 가로 사이에서 각도에 따라 6% 안쪽으로 달라지는지만 본다
+test("조금 납작한 과일(가로 80, 세로 68mm): 보는 각도가 달라도 지름 차이 6% 이내, 세로와 가로 사이", () => {
+  const center = [0, 0.034, 0];
+  const a = m.fitSphereViews(viewsAlong(approachPath(center, 20, 0.4, 0.2, 8), center, 0.04, 0.034));
+  const b = m.fitSphereViews(viewsAlong(approachPath(center, 55, 0.4, 0.2, 8, 0.02), center, 0.04, 0.034));
+  assert.ok(Math.abs(a.sizeMm - b.sizeMm) / b.sizeMm < 0.06, `경로1 ${a.sizeMm.toFixed(1)}mm, 경로2 ${b.sizeMm.toFixed(1)}mm`);
+  for (const x of [a, b]) assert.ok(x.sizeMm > 68 && x.sizeMm < 80.1, `지름 ${x.sizeMm.toFixed(1)}mm는 세로와 가로 사이`);
+});
+
+test("폰이 거의 움직이지 않으면(5cm 미만) 크기를 정하지 않음", () => {
+  const center = [0, 0.035, 0];
+  const views = viewsAlong(approachPath(center, 45, 0.35, 0.32, 5), center, 0.035, 0.035);
+  assert.equal(m.fitSphereViews(views), null);
+});
+
+test("위치가 3개보다 적으면 크기를 정하지 않음", () => {
+  const center = [0, 0.035, 0];
+  assert.equal(m.fitSphereViews(viewsAlong(approachPath(center, 45, 0.4, 0.2, 2), center, 0.035, 0.035)), null);
+});
+
+test("크기 확정: 마지막 5번이 2% 안쪽으로 모여야 정함", () => {
+  assert.equal(m.isSizeStable([70, 71, 70.5, 70.2]), false, "4번뿐");
+  assert.equal(m.isSizeStable([60, 75, 70.1, 70.4, 69.9, 70.3, 70.0]), true, "앞에서 흔들려도 마지막 5번이 모이면 정함");
+  assert.equal(m.isSizeStable([70, 72, 69, 71.5, 70.2]), false, "4% 흔들림");
+});
+
 if (failed) {
   console.log(`\n${failed}개 실패`);
   process.exit(1);

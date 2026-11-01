@@ -335,8 +335,84 @@ function measureSpheroidRays(raysWorld, camera, tableY) {
   return result;
 }
 
+// ---------- 여러 위치에서 본 윤곽으로 크기 정하기 ----------
+// 한 위치에서 본 과일 윤곽은 원뿔(축 d, sin α)이고, 과일(구) 중심은 그 축 위 「반지름 / sin α」 거리에 있다.
+//   중심 = O + (r / sin α) · d   (O: 그때 카메라 위치)
+// 미지수(중심 x·y·z, 반지름 r)에 대한 일차식이라, 여러 위치를 모으면 최소제곱으로 푼다.
+// 다가갈수록 커 보이는 정도(곧장 다가갈 때)와 옆으로 움직일 때의 시차가 모두 이 식에 들어 있어
+// 폰을 드는 각도나 테이블 높이를 가정하지 않는다. 폰이 거의 움직이지 않았으면 크기가 정해지지 않는다.
+// views: [{ origin: 카메라 위치(세계, m), d: 원뿔 축(세계, 단위 벡터), sinA }]
+// 반환: { center, radiusM, sizeMm, baselineM, rmsM } 또는 정할 수 없으면 null
+const MIN_VIEWS = 3;
+const MIN_BASELINE_M = 0.05; // 이보다 적게 움직이면 크기를 믿을 수 없다
+
+function fitSphereViews(views) {
+  if (views.length < MIN_VIEWS) return null;
+  let baselineM = 0;
+  for (const a of views) {
+    for (const b of views) {
+      baselineM = Math.max(baselineM, Math.hypot(a.origin[0] - b.origin[0], a.origin[1] - b.origin[1], a.origin[2] - b.origin[2]));
+    }
+  }
+  if (baselineM < MIN_BASELINE_M) return null;
+
+  // 정규방정식 (AᵀA) x = Aᵀb,  x = [중심 x, y, z, r]
+  const N = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+  const rhs = [0, 0, 0, 0];
+  for (const v of views) {
+    for (let k = 0; k < 3; k++) {
+      const row = [k === 0 ? 1 : 0, k === 1 ? 1 : 0, k === 2 ? 1 : 0, -v.d[k] / v.sinA];
+      for (let i = 0; i < 4; i++) {
+        rhs[i] += row[i] * v.origin[k];
+        for (let j = 0; j < 4; j++) N[i][j] += row[i] * row[j];
+      }
+    }
+  }
+  const x = solveLinear(N, rhs);
+  if (!x || !(x[3] > 0)) return null;
+  const center = [x[0], x[1], x[2]];
+  const r = x[3];
+
+  // 위치마다 「축 위 중심」이 맞춘 중심에서 벗어난 정도(m, 제곱평균)
+  let sum = 0;
+  for (const v of views) {
+    const t = r / v.sinA;
+    sum += (v.origin[0] + t * v.d[0] - center[0]) ** 2 + (v.origin[1] + t * v.d[1] - center[1]) ** 2 + (v.origin[2] + t * v.d[2] - center[2]) ** 2;
+  }
+  return { center, radiusM: r, sizeMm: 2 * r * 1000, baselineM, rmsM: Math.sqrt(sum / views.length) };
+}
+
+// 크기를 정해도 되는지: 마지막 count번의 계산값이 서로 ratio(최대-최소 / 평균) 안쪽으로 모였는가
+function isSizeStable(history, count = 5, ratio = 0.02) {
+  if (history.length < count) return false;
+  const last = history.slice(-count);
+  const max = Math.max(...last);
+  const min = Math.min(...last);
+  const mean = last.reduce((sum, v) => sum + v, 0) / count;
+  return (max - min) / mean < ratio;
+}
+
+// 가우스 소거(부분 피벗). 풀 수 없으면 null
+function solveLinear(A, b) {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    if (!(Math.abs(M[p][c]) > 1e-12)) return null;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / M[c][c];
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  return M.map((row, i) => row[n] / row[i]);
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
+    fitSphereViews, solveLinear, isSizeStable, MIN_BASELINE_M,
     transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr,
     pixelToRay, distanceFromPhoto, fitCone, coneError, coneOutline, distanceFromCone, cameraDirToWorld,
     measureFruitCone, normalize, coneRays, raysToPixels, worldDirToCamera, stretchPoint, stretchDir, spheroidRadiusAlong, viewTiltDeg,
