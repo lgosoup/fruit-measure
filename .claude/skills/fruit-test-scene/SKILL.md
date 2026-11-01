@@ -24,6 +24,23 @@ metadata:
    - 확인용 출력은 테스트에 남기지 않는다.
 6. **실패 조건도 테스트한다**: 계산하면 안 되는 입력이 `null`이나 오류(`none`, `cut`, `small`)로 끝나는지 본다.
 
+## 예시
+
+[예시] 「AR에서 지름 70mm 과일을 45도로 보면 크기와 거리가 3% 안에서 다시 나온다」를 확인하는 테스트
+
+```js
+test("AR 45도: 크기·거리 3% 이내", () => {
+  const opt = spheroidArScene(0.035, 0.035, 45, { noise: 8, shadow: true }); // 입력: 정답을 아는 장면
+  const found = detectFruitSpheroid(render(opt), seedFor(opt), opt.k, opt.pose);
+  const cam = [opt.pose[12], opt.pose[13], opt.pose[14]];
+  const m = measureSpheroidCone(found.cone, found.s, cam, 0);              // 출력: 계산한 크기·거리
+  assert.ok(relErr(m.widthMm, 70) < 0.03, `크기 ${m.widthMm.toFixed(1)}mm`);
+  assert.ok(relErr(m.distanceMm, trueSpheroidDistanceMm(opt)) < 0.03);     // 정답은 계산식과 따로 구함
+});
+```
+
+출력 예: `ok   AR 45도: 크기·거리 3% 이내`. 처음 통과하면 실제 값(예: 「크기 69.8/70.0」)을 한 번 찍어 본 뒤 그 출력은 지운다.
+
 ## 장면 옵션 (`render(opt)`, test/detect.test.js)
 
 | 옵션 | 뜻 | 쓰는 이유 |
