@@ -408,6 +408,20 @@ function distanceGuide(distanceMm, cut = false, limitMm = DISTANCE_LIMIT_MM) {
   return { inside: true, text: `${limitMm / 10}cm 안에 들어왔습니다` };
 }
 
+// ---------- 안정 판정 ----------
+// 최근 거리 값 count개의 흔들림(최대 - 최소)이 maxRangeMm 이하이면 안정. 폰을 들고 잠시 멈춘 상태를 뜻한다
+// 반환: { stable, meanMm, rangeMm } (값이 모자라면 stable: false, meanMm·rangeMm: null)
+const STABLE_COUNT = 6;      // 3프레임마다 하나씩 모이므로 약 0.3~0.6초
+const STABLE_RANGE_MM = 5;
+
+function distanceStability(history, count = STABLE_COUNT, maxRangeMm = STABLE_RANGE_MM) {
+  if (history.length < count) return { stable: false, meanMm: null, rangeMm: null };
+  const last = history.slice(-count);
+  const rangeMm = Math.max(...last) - Math.min(...last);
+  const meanMm = last.reduce((sum, v) => sum + v, 0) / count;
+  return { stable: rangeMm <= maxRangeMm, meanMm, rangeMm };
+}
+
 // 가우스 소거(부분 피벗). 풀 수 없으면 null
 function solveLinear(A, b) {
   const n = b.length;
@@ -428,7 +442,7 @@ function solveLinear(A, b) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    fitSphereViews, solveLinear, isSizeStable, MIN_BASELINE_M, distanceGuide, DISTANCE_LIMIT_MM,
+    fitSphereViews, solveLinear, isSizeStable, MIN_BASELINE_M, distanceGuide, DISTANCE_LIMIT_MM, distanceStability,
     transformPoint, projectToScreen, intrinsicsFromProjection, correctRoundFruit, measureFruitAr,
     pixelToRay, distanceFromPhoto, fitCone, coneError, coneOutline, distanceFromCone, cameraDirToWorld,
     measureFruitCone, normalize, coneRays, raysToPixels, worldDirToCamera, stretchPoint, stretchDir, spheroidRadiusAlong, viewTiltDeg,

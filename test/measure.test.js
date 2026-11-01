@@ -305,6 +305,18 @@ test("거리 안내: 12cm 밖이면 몇 cm 더 가까이, 안이면 완료, 너�
   assert.equal(m.distanceGuide(NaN).inside, false);
 });
 
+// ---------- 17단계: 안정 판정 ----------
+test("안정 판정: 최근 6개가 5mm 안쪽으로 모이면 안정, 흔들리거나 모자라면 아님", () => {
+  assert.equal(m.distanceStability([100, 101, 99]).stable, false, "3개뿐");
+  const still = m.distanceStability([130, 115, 101, 102, 100, 101, 103, 102]);
+  assert.equal(still.stable, true, "다가오다 멈춤");
+  near(still.meanMm, 101.5, 1e-9, "평균");
+  near(still.rangeMm, 3, 1e-9, "흔들림");
+  assert.equal(m.distanceStability([100, 104, 98, 103, 99, 105]).stable, false, "7mm 흔들림");
+  assert.equal(m.distanceStability([110, 108, 106, 104, 102, 100]).stable, false, "계속 다가오는 중(10mm)");
+  assert.equal(m.distanceStability([100, 105, 100, 105, 100, 105]).stable, true, "딱 5mm는 안정");
+});
+
 if (failed) {
   console.log(`\n${failed}개 실패`);
   process.exit(1);

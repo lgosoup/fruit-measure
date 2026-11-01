@@ -23,6 +23,8 @@ const SIZE_STABLE_COUNT = 5;      // 크기를 정하려면 이만큼 연달아 
 const SIZE_STABLE_RATIO = 0.02;   // 이 비율(최대-최소 / 평균) 안쪽으로 모여야 한다
 const btnReselect = document.getElementById("btn-reselect");
 const arDistance = document.getElementById("ar-distance");
+const btnAuto = document.getElementById("btn-auto");
+const AUTO_HOLD_FRAMES = 90;      // 사진 화면에서 돌아온 뒤 이만큼(약 1.5초)은 자동 촬영하지 않는다
 const arDone = document.getElementById("ar-done");
 
 // ---------- AR 지원 확인 ----------
@@ -68,6 +70,11 @@ let trackedCount = 0;     // 지금 과일을 연달아 따라간 횟수. 충분
 // 크기가 정해진 뒤 따라가는 과일의 화면 속 크기로 구한 거리 { distanceMm, cut }. wasInside: 직전에 12cm 안이었는가
 let liveDistance = null;
 let wasInside = false;
+// distanceHistory: 크기를 잰 뒤 따라가며 구한 거리(mm). 안정 판정에 쓴다
+// autoCapture: 12cm 안에서 안정되면 알아서 찍을지, autoHold: 남은 자동 촬영 대기 프레임
+let distanceHistory = [];
+let autoCapture = true;
+let autoHold = 0;
 const TRACK_ESTABLISHED = 5;
 let arNote = null;        // 잠깐 보여줄 안내 { text, until }. 매 프레임 안내에 덮이지 않게 한다
 
@@ -82,6 +89,10 @@ btnCapture.addEventListener("click", () => {
 });
 btnReselect.addEventListener("click", () => {
   reselectRequested = true;
+});
+btnAuto.addEventListener("click", () => {
+  autoCapture = !autoCapture;
+  btnAuto.textContent = autoCapture ? "자동 촬영: 켬" : "자동 촬영: 끔";
 });
 document.getElementById("btn-remeasure").addEventListener("click", resetArMeasure);
 
@@ -137,6 +148,9 @@ function showArUi() {
   photoScreen.hidden = true;
   arUi.hidden = false;
   arCanvas.hidden = false;
+  // 다시 찍으러 돌아오자마자 같은 자리에서 또 찍히지 않게 잠시 기다리고, 흔들림 기록도 새로 모은다
+  autoHold = AUTO_HOLD_FRAMES;
+  distanceHistory = [];
 }
 
 function resizeArCanvas() {
@@ -179,6 +193,7 @@ function onXrFrame(time, frame) {
     showArNote("과일을 화면 가운데에 가깝게 해 주세요");
   }
   frameCount++;
+  if (autoHold > 0) autoHold--;
   if (frameCount % TRACK_EVERY === 0) updateTarget(view, layer, pose.emulatedPosition);
 
   // 크기가 정해지면 촬영 버튼이 보인다. 다시 선택하기는 과일을 잡은 뒤에만 쓸 수 있다
@@ -204,7 +219,9 @@ function arGuideText(emulated) {
     // 거리는 카메라 이미지와 정해진 크기로만 구하므로 AR이 폰 위치를 놓쳐도 이어진다
     if (!target) return "과일을 다시 찾는 중입니다. 과일을 화면 가운데에 두세요(잰 크기는 그대로)";
     const guide = distanceGuide(liveDistance && liveDistance.distanceMm, liveDistance && liveDistance.cut);
-    return guide.inside ? `${guide.text}. 촬영하세요` : guide.text;
+    if (!guide.inside) return guide.text;
+    if (!autoCapture) return `${guide.text}. 촬영하세요`;
+    return distanceStability(distanceHistory).stable ? `${guide.text}. 촬영합니다` : `${guide.text}. 폰을 잠시 멈춰 주세요`;
   }
   if (!target) {
     if (searchError === "cut") return "과일이 화면에 다 들어오게 조금 떨어져 주세요";
@@ -226,7 +243,9 @@ function showDistance() {
   const show = arResult !== null && target !== null && liveDistance !== null && !liveDistance.cut;
   arDistance.hidden = !show;
   if (!show) return;
-  const text = `표면까지 ${(liveDistance.distanceMm / 10).toFixed(1)} cm`;
+  const stability = distanceStability(distanceHistory);
+  const state = stability.rangeMm === null ? "" : stability.stable ? " · 안정됨" : " · 흔들림";
+  const text = `표면까지 ${(liveDistance.distanceMm / 10).toFixed(1)} cm${state}`;
   if (arDistance.textContent !== text) arDistance.textContent = text;
   arDistance.classList.toggle("ar-distance-inside", distanceGuide(liveDistance.distanceMm).inside);
 }
@@ -262,6 +281,7 @@ function loseTarget() {
   trackedCount = 0;
   liveDistance = null;
   wasInside = false;
+  distanceHistory = [];
 }
 
 // 따라가는 과일은 그대로 두고 크기만 다시 잰다
@@ -269,6 +289,7 @@ function resetArMeasure() {
   arNote = null;
   liveDistance = null;
   wasInside = false;
+  distanceHistory = [];
   views = [];
   sizeHistory = [];
   arResult = null;
@@ -296,6 +317,7 @@ function updateTarget(view, layer, emulated) {
     if (arResult && (found.error === "cut" || (target && fillsScreen(target, image)))) {
       liveDistance = { cut: true };
       wasInside = false;
+      distanceHistory = [];
       return;
     }
     if (!target) searchError = found.error;
@@ -321,6 +343,10 @@ function updateTarget(view, layer, emulated) {
     const inside = distanceGuide(liveDistance.distanceMm).inside;
     if (inside && !wasInside && navigator.vibrate) navigator.vibrate(80);
     wasInside = inside;
+    distanceHistory.push(liveDistance.distanceMm);
+    if (distanceHistory.length > 30) distanceHistory.shift();
+    // 12cm 안에서 잠시 멈추면(안정) 그 순간을 찍는다. 이 순간이 근적외선을 비추고 재는 순간이다
+    if (inside && autoCapture && autoHold === 0 && distanceStability(distanceHistory).stable) captureRequested = true;
     return;
   }
   // AR이 폰 위치를 모르면(추정 위치) 크기 계산에 모으지 않는다

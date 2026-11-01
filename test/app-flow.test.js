@@ -277,6 +277,77 @@ test("크기를 잰 뒤 과일을 놓쳐도 잰 크기는 남고 과일만 다�
   assert.match(app.el("ar-guide").textContent, /더 가까이/);
 });
 
+// ---------- 17단계: 안정 판정과 자동 촬영 ----------
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+const photoOpen = (app) => app.el("screen-photo").hidden === false && app.el("ar-ui").hidden === true;
+
+test("12cm 안에서 잠시 멈추면 자동으로 찍히고, 사진에서 그 순간의 거리가 나와 저장됨", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true; // index.html에서 처음에 숨겨 둔 사진 화면
+  approach(app, 0.2, 0.1);
+  feed(app, sceneAt(0.1), 30); // 멈춤
+  await tick();
+  assert.ok(photoOpen(app), "자동 촬영되지 않음");
+  const d = app.run("photoResult && photoResult.distanceMm");
+  assert.ok(d && Math.abs(d - 100) / 100 < 0.03, `사진 거리 ${d}mm`);
+  app.el("btn-save").click();
+  const records = JSON.parse(app.context.localStorage.getItem("fruit-measure-records"));
+  assert.ok(records.length === 1 && Math.abs(records[0].distanceMm - 100) < 3, JSON.stringify(records));
+});
+
+test("12cm 안이라도 흔들리면 찍지 않고 「잠시 멈춰」, 거리 옆에 「흔들림」", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  approach(app, 0.2, 0.11);
+  for (let i = 0; i < 8; i++) feed(app, sceneAt(i % 2 ? 0.11 : 0.1), 3); // 1cm씩 왔다 갔다
+  await tick();
+  assert.ok(!photoOpen(app), "흔들리는데 찍힘");
+  assert.match(app.el("ar-guide").textContent, /잠시 멈춰/);
+  assert.match(app.el("ar-distance").textContent, /흔들림/);
+});
+
+test("12cm 밖에서는 멈춰 있어도 찍지 않음", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  approach(app, 0.2, 0.16);
+  feed(app, sceneAt(0.16), 30);
+  await tick();
+  assert.ok(!photoOpen(app), "12cm 밖에서 찍힘");
+  assert.match(app.el("ar-distance").textContent, /안정됨/);
+});
+
+test("자동 촬영을 끄면 멈춰도 찍지 않고 「촬영하세요」, 직접 촬영은 됨", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  app.el("btn-auto").click();
+  assert.match(app.el("btn-auto").textContent, /끔/);
+  approach(app, 0.2, 0.1);
+  feed(app, sceneAt(0.1), 30);
+  await tick();
+  assert.ok(!photoOpen(app), "꺼져 있는데 찍힘");
+  assert.match(app.el("ar-guide").textContent, /촬영하세요/);
+  app.el("btn-capture").click();
+  feed(app, sceneAt(0.1), 1);
+  await tick();
+  assert.ok(photoOpen(app), "직접 촬영이 안 됨");
+});
+
+test("다시 찍기로 돌아오면 바로 또 찍히지 않고, 잠시 뒤 다시 멈추면 찍힘", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  approach(app, 0.2, 0.1);
+  feed(app, sceneAt(0.1), 30);
+  await tick();
+  assert.ok(photoOpen(app), "처음 자동 촬영이 안 됨");
+  app.el("btn-retake").click();
+  feed(app, sceneAt(0.1), 30); // 약 0.5초
+  await tick();
+  assert.ok(!photoOpen(app), "돌아오자마자 또 찍힘");
+  feed(app, sceneAt(0.1), 90); // 1.5초 뒤
+  await tick();
+  assert.ok(photoOpen(app), "기다린 뒤에도 찍히지 않음");
+});
+
 test("회귀: 크기를 잰 뒤 가까이서 촬영하면 사진에서 거리가 나오고, 저장하면 기록이 남고 다음 과일 찾기로 돌아감", async () => {
   const app = loadApp();
   startFakeAr(app);
