@@ -133,6 +133,7 @@ test("AR이 폰 위치를 놓친 프레임은 크기 계산에 넣지 않음", (
   const app = loadApp();
   startFakeAr(app);
   const frames = approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 });
+  feed(app, frames[0], 1); // AR이 한 번 위치를 잡은 뒤(과일 찾기는 아직 돌지 않음)
   frames.forEach((scene) => feed(app, scene, 3, true));
   assert.strictEqual(app.run("views.length"), 0);
   assert.match(app.el("ar-guide").textContent, /위치를 놓쳤습니다/);
@@ -167,6 +168,39 @@ test("과일이 화면에 없으면 가운데에 두라는 안내", () => {
   const scene = { ...approachFrames(R, 40, 0.42, 0.22, 2, { noise: 8 })[0], center: [5, R, 5] };
   feed(app, scene, 6);
   assert.match(app.el("ar-guide").textContent, /가운데에 두세요/);
+});
+
+test("시작 직후 AR이 아직 위치를 못 잡았을 때는 「놓쳤습니다」가 아니라 「찾는 중」", () => {
+  const app = loadApp();
+  startFakeAr(app);
+  app.context.onXrFrame(0, { getViewerPose: () => null });
+  assert.match(app.el("ar-guide").textContent, /찾는 중/);
+  const frames = approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 });
+  feed(app, frames[0], 6, true);
+  assert.match(app.el("ar-guide").textContent, /찾는 중/);
+  assert.doesNotMatch(app.el("ar-guide").textContent, /놓쳤/);
+});
+
+test("과일을 잠깐만 잡았다 놓치면 「놓쳤습니다」 없이 다시 찾음", () => {
+  const app = loadApp();
+  startFakeAr(app);
+  const frames = approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 });
+  feed(app, frames[0], 3); // 한 번 잡음
+  const empty = { ...frames[1], center: [5, R, 5] };
+  feed(app, empty, 15);
+  assert.ok(app.run("target === null"));
+  assert.doesNotMatch(app.el("ar-guide").textContent, /놓쳤/);
+  assert.match(app.el("ar-guide").textContent, /찾는 중/);
+});
+
+test("충분히 따라가던 과일을 놓치면 「놓쳤습니다」", () => {
+  const app = loadApp();
+  startFakeAr(app);
+  const frames = approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 });
+  frames.slice(0, 6).forEach((scene) => feed(app, scene, 3)); // 6번 따라감
+  const empty = { ...frames[6], center: [5, R, 5] };
+  feed(app, empty, 15);
+  assert.match(app.el("ar-guide").textContent, /놓쳤습니다/);
 });
 
 test("회귀: 크기를 잰 뒤 가까이서 촬영하면 사진에서 거리가 나오고, 저장하면 기록이 남고 다음 과일 찾기로 돌아감", async () => {

@@ -293,11 +293,12 @@ body {
   pointer-events: auto;
 }
 
+/* AR을 시작하면 크롬이 화면 위쪽에 기본 안내를 띄우므로, 그 아래로 내린다 */
 .ar-top {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px;
+  padding: calc(env(safe-area-inset-top, 0px) + 88px) 16px 16px;
 }
 
 .ar-top .btn-bar {

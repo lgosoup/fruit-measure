@@ -62,6 +62,9 @@ let views = [];
 let sizeHistory = [];
 let arResult = null;
 let frameCount = 0;
+let arReady = false;      // AR이 한 번이라도 폰 위치를 잡았는가. 그 전에는 놓쳤다는 안내 대신 찾는 중이라고 한다
+let trackedCount = 0;     // 지금 과일을 연달아 따라간 횟수. 충분히 따라간 과일을 놓쳤을 때만 놓쳤다고 알린다
+const TRACK_ESTABLISHED = 5;
 let arNote = null;        // 잠깐 보여줄 안내 { text, until }. 매 프레임 안내에 덮이지 않게 한다
 
 function showArNote(text) {
@@ -114,6 +117,7 @@ async function startAr() {
 
 function onArEnd() {
   xr = null;
+  arReady = false;
   captureRequested = false;
   reselectRequested = false;
   arNote = null;
@@ -158,11 +162,12 @@ function onXrFrame(time, frame) {
       captureRequested = false;
       showArNote("위치를 잃어 촬영하지 못했습니다. 조금 떨어져 다시 촬영해 주세요");
     }
-    setArGuide(time, "위치를 잃었습니다. 폰을 천천히 움직여 주세요");
+    setArGuide(time, arReady ? "위치를 잃었습니다. 폰을 천천히 움직여 주세요" : SEARCHING);
     drawArOverlay(null);
     return;
   }
   const view = pose.views[0];
+  if (!pose.emulatedPosition) arReady = true;
 
   if (reselectRequested) {
     reselectRequested = false;
@@ -187,13 +192,15 @@ function onXrFrame(time, frame) {
   drawArOverlay(view);
 }
 
+const SEARCHING = "과일을 찾는 중입니다. 30cm쯤 떨어져 과일을 화면 가운데에 두세요";
+
 function arGuideText(emulated) {
   if (arResult) return "크기를 쟀습니다. 과일 쪽으로 다가가 과일이 화면에 다 들어오게 촬영하세요";
   if (!target) {
     if (searchError === "cut") return "과일이 화면에 다 들어오게 조금 떨어져 주세요";
-    return "30cm쯤 떨어져 과일을 화면 가운데에 두세요";
+    return SEARCHING;
   }
-  if (emulated) return "AR이 폰 위치를 놓쳤습니다. 조금 떨어져 천천히 움직여 주세요";
+  if (emulated) return arReady ? "AR이 폰 위치를 놓쳤습니다. 조금 떨어져 천천히 움직여 주세요" : SEARCHING;
   const moved = views.length > 1 ? Math.round(maxBaselineCm(views)) : 0;
   return `과일을 찾았습니다. 과일 쪽으로 천천히 다가오세요 (${views.length}곳 측정 · ${moved}cm 이동)`;
 }
@@ -219,6 +226,7 @@ function setArGuide(time, text) {
 function resetTarget() {
   target = null;
   lostCount = 0;
+  trackedCount = 0;
   searchError = "none";
   resetArMeasure();
 }
@@ -250,12 +258,15 @@ function updateTarget(view, layer, emulated) {
   if (!found.cone) {
     if (!target) searchError = found.error;
     else if (++lostCount >= LOST_LIMIT) {
+      // 잠깐 잡았다 놓친 것이면 조용히 다시 찾고, 충분히 따라가던 과일을 놓쳤을 때만 알린다
+      const established = trackedCount >= TRACK_ESTABLISHED;
       resetTarget();
-      showArNote("과일을 놓쳤습니다. 과일을 화면 가운데에 두세요");
+      if (established) showArNote("과일을 놓쳤습니다. 과일을 화면 가운데에 두세요");
     }
     return;
   }
   lostCount = 0;
+  trackedCount++;
   const p = view.transform.position;
   const position = [p.x, p.y, p.z];
   const matrix = Array.from(view.transform.matrix);
