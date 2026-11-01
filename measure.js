@@ -403,7 +403,7 @@ function distanceGuide(distanceMm, cut = false, limitMm = DISTANCE_LIMIT_MM) {
   if (!(distanceMm > 0)) return { inside: false, text: "과일을 찾는 중입니다" };
   if (distanceMm > limitMm) {
     const cm = Math.max(1, Math.ceil((distanceMm - limitMm) / 10));
-    return { inside: false, text: `${cm}cm 더 가까이 다가가 주세요` };
+    return { inside: false, text: `촬영하려면 ${cm}cm 더 가까이 다가가 주세요` };
   }
   return { inside: true, text: `${limitMm / 10}cm 안에 들어왔습니다` };
 }
@@ -411,7 +411,7 @@ function distanceGuide(distanceMm, cut = false, limitMm = DISTANCE_LIMIT_MM) {
 // ---------- 안정 판정 ----------
 // 최근 거리 값 count개의 흔들림(최대 - 최소)이 maxRangeMm 이하이면 안정. 폰을 들고 잠시 멈춘 상태를 뜻한다
 // 반환: { stable, meanMm, rangeMm } (값이 모자라면 stable: false, meanMm·rangeMm: null)
-const STABLE_COUNT = 6;      // 3프레임마다 하나씩 모이므로 약 0.3~0.6초
+const STABLE_COUNT = 10;     // 3프레임마다 하나씩 모이므로 약 0.5~1초
 const STABLE_RANGE_MM = 5;
 
 function distanceStability(history, count = STABLE_COUNT, maxRangeMm = STABLE_RANGE_MM) {

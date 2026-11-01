@@ -306,6 +306,27 @@ test("12cm 안이라도 흔들리면 찍지 않고 「잠시 멈춰」, 거리 �
   assert.match(app.el("ar-distance").textContent, /흔들림/);
 });
 
+test("폰 확인 버그: 천천히 다가와 12cm 안에 들어오자마자 찍히지 않고, 들어온 뒤 멈춰야 찍힘", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  approach(app, 0.2, 0.13);
+  // 1mm씩 천천히 다가오며 12cm 선을 넘는다(예전에는 넘자마자 찍혔다)
+  for (let mm = 130; mm >= 117; mm--) feed(app, sceneAt(mm / 1000), 3);
+  await tick();
+  assert.ok(!photoOpen(app), "들어오자마자 찍힘");
+  assert.match(app.el("ar-guide").textContent, /잠시 멈춰/);
+  feed(app, sceneAt(0.117), 30); // 멈춤
+  await tick();
+  assert.ok(photoOpen(app), "멈췄는데 찍히지 않음");
+});
+
+test("과일을 찾은 뒤 크기를 재는 동안 촬영 거리(12cm)까지 다가오라는 안내", () => {
+  const app = loadApp();
+  startFakeAr(app);
+  approachFrames(R, 40, 0.42, 0.22, 14, { noise: 8 }).slice(0, 3).forEach((scene) => feed(app, scene, 3));
+  assert.match(app.el("ar-guide").textContent, /촬영 거리\(12cm\)까지/);
+});
+
 test("12cm 밖에서는 멈춰 있어도 찍지 않음", async () => {
   const app = measuredApp();
   app.el("screen-photo").hidden = true;

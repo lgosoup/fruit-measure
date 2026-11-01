@@ -41,7 +41,7 @@ metadata:
 await fakeAr.start();
 fakeAr.approach(0.42, 0.22, 14);   // → { size: "69.1", done: true, ... }
 for (let cm = 20; cm >= 16; cm--) fakeAr.surface(cm);
-fakeAr.state();                    // → { distance: "표면까지 15.9 cm", guide: "4cm 더 가까이 다가가 주세요", inside: false }
+fakeAr.state();                    // → { distance: "표면까지 15.9 cm", guide: "촬영하려면 4cm 더 가까이 다가가 주세요", inside: false }
 for (let cm = 15; cm >= 10; cm--) fakeAr.surface(cm);
 fakeAr.state();                    // → { distance: "표면까지 9.9 cm", guide: "12cm 안에 들어왔습니다. 촬영하세요", inside: true }
 ```

@@ -229,7 +229,7 @@ function arGuideText(emulated) {
   }
   if (emulated) return arReady ? "AR이 폰 위치를 놓쳤습니다. 조금 떨어져 천천히 움직여 주세요" : SEARCHING;
   const moved = views.length > 1 ? Math.round(maxBaselineCm(views)) : 0;
-  return `과일을 찾았습니다. 과일 쪽으로 천천히 다가오세요 (${views.length}곳 측정 · ${moved}cm 이동)`;
+  return `과일을 찾았습니다. 크기를 재면서 촬영 거리(12cm)까지 천천히 다가오세요 (${views.length}곳 측정 · ${moved}cm 이동)`;
 }
 
 // 과일이 화면의 짧은 변 절반 넘게 차지하는가(사진 속 지름 기준)
@@ -341,7 +341,11 @@ function updateTarget(view, layer, emulated) {
   if (arResult) {
     liveDistance = { distanceMm: distanceFromCone(found.cone, arResult.sizeMm).distanceMm, cut: false };
     const inside = distanceGuide(liveDistance.distanceMm).inside;
-    if (inside && !wasInside && navigator.vibrate) navigator.vibrate(80);
+    if (inside && !wasInside) {
+      if (navigator.vibrate) navigator.vibrate(80);
+      // 다가오다 멈칫한 값까지 안정으로 치지 않게, 12cm 안에 들어온 뒤의 값으로만 안정을 판정한다
+      distanceHistory = [];
+    }
     wasInside = inside;
     distanceHistory.push(liveDistance.distanceMm);
     if (distanceHistory.length > 30) distanceHistory.shift();
