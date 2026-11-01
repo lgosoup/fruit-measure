@@ -61,7 +61,10 @@ function render(opt) {
       const t = (-b - Math.sqrt(disc)) / vv;
       const hit = [cam[0] + u[0] * t, cam[1] + u[1] * t, cam[2] + u[2] * t];
       const n = normalize([(hit[0] - center[0]) / r ** 2, (hit[1] - center[1]) / rc ** 2, (hit[2] - center[2]) / r ** 2]);
-      if (opt.stem && n[1] > 0.985) return [90, 70, 30];
+      // 꼭지: stem이 숫자면 꼭지 크기(위쪽 법선의 cos 문턱값, 작을수록 큰 꼭지). true면 작은 꼭지(0.985)
+      if (opt.stem && n[1] > (typeof opt.stem === "number" ? opt.stem : 0.985)) return [90, 70, 30];
+      // 카메라 쪽을 향한 꼭지(위에서 내려다볼 때처럼 사진 속 과일 가운데에 보이는 꼭지). 값은 cos 문턱값
+      if (opt.facingStem && -(n[0] * u[0] + n[1] * u[1] + n[2] * u[2]) > opt.facingStem) return [90, 70, 30];
       const lambert = Math.max(0, n[0] * light[0] + n[1] * light[1] + n[2] * light[2]);
       const view = -(n[0] * u[0] + n[1] * u[1] + n[2] * u[2]);
       if (opt.highlight && lambert > 0.97 && view > 0.5) return [255, 245, 225];

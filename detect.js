@@ -126,6 +126,36 @@ function trackFruit(image, k, prev) {
   return { ...found, center };
 }
 
+// 촬영한 사진에서 AR로 따라가던 과일(hintCone: 촬영 순간의 원뿔)과 위치·크기가 맞는 윤곽을 찾는다.
+// 사진 정가운데가 꼭지처럼 과일과 색이 다른 곳이면 그 테두리를 과일로 잡으므로, 따라가던 원 안쪽 여러 곳에서
+// 찾아 보고 따라가던 원과 크기가 가장 비슷한 것을 고른다. 맞는 것이 없으면 { error }
+const PHOTO_RATIO_MIN = 0.75;
+const PHOTO_RATIO_MAX = 1.33;
+function findInPhoto(image, k, hintCone) {
+  const c = coneCenterPx(hintCone, k);
+  const r = coneRadiusPx(hintCone, k);
+  const seeds = [c];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    seeds.push({ x: c.x + Math.cos(a) * r * 0.5, y: c.y + Math.sin(a) * r * 0.5 });
+  }
+  let best = null;
+  let cut = false;
+  for (const seed of seeds) {
+    const found = detectFruit(image, seed, k);
+    if (!found.cone) {
+      cut = cut || found.error === "cut";
+      continue;
+    }
+    const center = coneCenterPx(found.cone, k);
+    const ratio = coneRadiusPx(found.cone, k) / r;
+    if (ratio < PHOTO_RATIO_MIN || ratio > PHOTO_RATIO_MAX || Math.hypot(center.x - c.x, center.y - c.y) > r * 0.5) continue;
+    const score = Math.abs(Math.log(ratio));
+    if (!best || score < best.score) best = { ...found, center, score };
+  }
+  return best || { error: cut ? "cut" : "lost" };
+}
+
 function bestRatio(raysWorld) {
   return searchSpheroidRatio((s) => {
     const fit = fitConeStretched(raysWorld, s);
@@ -297,5 +327,5 @@ function dot(a, b) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit, coneCenterPx, findEdgePoints, colorDistance, otsu };
+  module.exports = { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit, findInPhoto, coneCenterPx, findEdgePoints, colorDistance, otsu };
 }

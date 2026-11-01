@@ -4,7 +4,7 @@ const assert = require("node:assert");
 const {
   cameraDirToWorld, normalize, distanceFromCone, measureFruitCone, pixelToRay, measureSpheroidCone, fitSphereViews,
 } = require("../measure.js");
-const { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit } = require("../detect.js");
+const { detectFruit, detectFruitSpheroid, acquireFruit, trackFruit, findInPhoto } = require("../detect.js");
 const { cameraPose, render, seedFor, approachFrames } = require("./scene.js");
 
 let failed = 0;
@@ -279,6 +279,45 @@ test("따라가던 과일이 갑자기 사라지면 놓침으로 끝남", () => 
   const gone = { ...opt, center: [5, R, 5] };
   const found = trackFruit(render(gone), gone.k, prev);
   assert.strictEqual(found.cone, undefined);
+});
+
+
+// ---------- 17단계: 촬영 사진에서 꼭지를 과일로 잡는 문제 ----------
+// 위에서 10cm로 찍은 사진: 사진 가운데에 큰 꼭지가 있다. AR에서 따라가던 원뿔(정답 근처)을 주면 과일 윤곽을 골라야 한다
+function topStemPhoto() {
+  const opt = approachFrames(R, 0, 0.135, 0.135, 2, { noise: 8, stem: 0.95 })[0];
+  const cam = [opt.pose[12], opt.pose[13], opt.pose[14]];
+  const D = Math.hypot(cam[0] - opt.center[0], cam[1] - opt.center[1], cam[2] - opt.center[2]);
+  const s = seedFor(opt);
+  const d = normalize([(s.x - opt.k.cx) / opt.k.fx, (s.y - opt.k.cy) / opt.k.fy, 1]);
+  const alpha = Math.asin(R / D);
+  return { opt, image: render(opt), truth: (D - R) * 1000, cone: { d, alpha, sinA: Math.sin(alpha) } };
+}
+
+test("꼭지(재현): 위에서 찍은 사진의 가운데에서 찾으면 꼭지를 과일로 잡아 거리가 크게 틀림", () => {
+  const { opt, image, truth } = topStemPhoto();
+  const found = detectFruit(image, { x: opt.k.cx, y: opt.k.cy }, opt.k);
+  assert.ok(found.cone, "인식 실패");
+  const d = distanceFromCone(found.cone, 2 * R * 1000).distanceMm;
+  assert.ok(d > truth * 2, `꼭지가 아니라 과일을 잡음(${d.toFixed(0)}mm / ${truth.toFixed(0)}mm) → 이 재현 장면이 더는 꼭지 문제를 만들지 못함`);
+});
+
+test("꼭지: 따라가던 원(크기 ±10%)을 주면 꼭지가 아닌 과일 윤곽을 골라 거리 2% 이내", () => {
+  const { opt, image, truth } = topStemPhoto();
+  for (const scale of [0.9, 1, 1.1]) {
+    const { cone } = topStemPhoto();
+    const alpha = Math.atan(Math.tan(cone.alpha) * scale);
+    const found = findInPhoto(image, opt.k, { ...cone, alpha, sinA: Math.sin(alpha) });
+    assert.ok(found.cone, `원 크기 ×${scale}: 인식 실패 ${found.error}`);
+    const d = distanceFromCone(found.cone, 2 * R * 1000).distanceMm;
+    assert.ok(relErr(d, truth) < 0.02, `원 크기 ×${scale}: 거리 ${d.toFixed(1)}mm, 실제 ${truth.toFixed(1)}mm`);
+  }
+});
+
+test("꼭지: 사진에 과일이 없으면 다른 것을 잡지 않고 실패", () => {
+  const { opt, cone } = topStemPhoto();
+  const empty = render({ ...opt, center: [5, R, 5] });
+  assert.ok(!findInPhoto(empty, opt.k, cone).cone);
 });
 
 console.log(failed ? `\n${failed}개 실패` : "\n모두 통과");

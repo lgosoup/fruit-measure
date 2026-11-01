@@ -327,6 +327,20 @@ test("과일을 찾은 뒤 크기를 재는 동안 촬영 거리(12cm)까지 다
   assert.match(app.el("ar-guide").textContent, /촬영 거리\(12cm\)까지/);
 });
 
+test("폰 확인 버그: 사진 가운데에 꼭지가 있어도 꼭지가 아니라 따라가던 과일로 거리를 잼", async () => {
+  const app = measuredApp();
+  app.el("screen-photo").hidden = true;
+  app.el("btn-auto").click(); // 직접 촬영으로 꼭지가 보이는 순간을 찍는다
+  approach(app, 0.2, 0.1);
+  feed(app, sceneAt(0.1), 6);
+  app.el("btn-capture").click();
+  feed(app, { ...sceneAt(0.1), facingStem: 0.9 }, 1); // 카메라 쪽(사진 가운데)에 큰 꼭지
+  await tick();
+  assert.ok(photoOpen(app), "사진 화면이 열리지 않음");
+  const d = app.run("photoResult && photoResult.distanceMm");
+  assert.ok(d && Math.abs(d - 100) / 100 < 0.03, `사진 거리 ${d}mm (실제 100mm)`);
+});
+
 test("12cm 밖에서는 멈춰 있어도 찍지 않음", async () => {
   const app = measuredApp();
   app.el("screen-photo").hidden = true;

@@ -469,7 +469,8 @@ function capture(view, layer) {
     xr.gl.bindFramebuffer(xr.gl.FRAMEBUFFER, layer.framebuffer);
   }
   const intrinsics = intrinsicsFromProjection(view.projectionMatrix, image.width, image.height);
-  showPhoto(image, intrinsics);
+  // 따라가던 과일의 원뿔(방향·각도)은 사진 해상도와 상관없으므로 그대로 사진에 넘긴다
+  showPhoto(image, intrinsics, target ? target.cone : null);
 }
 
 // 카메라 텍스처를 복사해 읽는다(셰이더로 그린 뒤 readPixels). maxShort를 주면 짧은 변이 그 크기가 되도록 줄여 읽는다
@@ -571,7 +572,7 @@ function setPhotoMode(mode) {
   resetPhotoFruit();
 }
 
-async function showPhoto(image, cameraIntrinsics) {
+async function showPhoto(image, cameraIntrinsics, trackedCone = null) {
   const bitmap = await createImageBitmap(image);
   if (photo) photo.close();
   photo = bitmap;
@@ -584,8 +585,9 @@ async function showPhoto(image, cameraIntrinsics) {
   setPhotoMode("auto");
   resizeCanvas();
   fitToScreen();
-  // 과일이 화면 가운데 오도록 찍으므로 먼저 가운데에서 찾아 본다
-  detectPhotoFruit({ x: photo.width / 2, y: photo.height / 2 });
+  // AR에서 따라가던 과일이 있으면 그 위치·크기에 맞는 윤곽을 찾는다. 없으면 사진 가운데에서 찾아 본다
+  if (trackedCone) findTrackedFruit(trackedCone);
+  else detectPhotoFruit({ x: photo.width / 2, y: photo.height / 2 });
   draw();
 }
 
@@ -600,6 +602,15 @@ function resetPhotoFruit() {
 function detectPhotoFruit(p) {
   photoDetect = detectFruit(photoImage, p, intrinsics);
   photoResult = photoDetect.cone && arResult ? distanceFromCone(photoDetect.cone, arResult.sizeMm) : null;
+  updatePhotoStatus();
+}
+
+// 사진 정가운데만 보면 위에서 찍었을 때 꼭지를 과일로 잡는다. 따라가던 원 안쪽 여러 곳에서 크기가 맞는 윤곽을 고르고,
+// 사진에서 못 찾으면 따라가던 원을 그대로 쓴다(촬영 순간에 AR이 본 과일)
+function findTrackedFruit(trackedCone) {
+  photoDetect = findInPhoto(photoImage, intrinsics, trackedCone);
+  if (!photoDetect.cone) photoDetect = { cone: trackedCone, outline: coneOutline(trackedCone, intrinsics), inliers: [] };
+  photoResult = arResult ? distanceFromCone(photoDetect.cone, arResult.sizeMm) : null;
   updatePhotoStatus();
 }
 
